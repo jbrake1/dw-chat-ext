@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock ChatGPT</title>
+<style>body{font-family:system-ui;margin:0}#thread{padding:16px;min-height:200px}.msg{margin:8px 0;padding:6px}[data-message-author-role=user]{background:#eee}form{position:fixed;bottom:0;left:0;right:0;border-top:1px solid #ccc;padding:8px;background:#fff}
+#prompt-textarea,#composer-input{min-height:40px;border:1px solid #888;padding:4px}#attachments{display:flex;gap:6px}</style></head>
+<body>
+<!-- Mock of chatgpt.com's DOM (best-effort mimic of what we believe the live page looks like). ?v=2 renames everything (simulated redesign). -->
+<main><div id="thread"></div></main>
+<form id="composer" onsubmit="return false">
+  <div id="attachments"></div>
+  <div id="prompt-slot"></div>
+  <span id="input-slot"></span>
+  <span id="btn-slot"></span>
+</form>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var V = q.get('v') === '2' ? 2 : 1;
+  var SPEED = Number(q.get('speed') || 30), NTOK = Number(q.get('tokens') || 40), FAIL = q.get('fail');
+  var NOFILEINPUT = q.get('fileinput') === '0', LOGGEDOUT = q.get('loggedout') === '1';
+  var HTMLDOC = q.get('html') === '1';  // reply also contains a whole updated page in a code box
+  var ID = { 1: { prompt: 'prompt-textarea', send: 'send-button', stop: 'stop-button', attach: 'attachment-thumbnail' },
+             2: { prompt: 'composer-input', send: 'composer-send', stop: 'composer-halt', attach: 'composer-file-chip' } }[V];
+  var thread = document.getElementById('thread'), attachments = document.getElementById('attachments');
+  var prompt, fileInput, sendBtn, stopBtn, files = [], uploading = false, streaming = false, timer = null;
+  window.__received = []; window.__events = [];
+
+  if (LOGGEDOUT) { var l = document.createElement('button'); l.setAttribute('data-testid', 'login-button'); l.textContent = 'Log in'; document.body.appendChild(l); return; }
+
+  prompt = document.createElement('div');
+  prompt.setAttribute('contenteditable', 'true'); prompt.setAttribute('role', 'textbox');
+  if (V === 1) { prompt.id = 'prompt-textarea'; prompt.className = 'ProseMirror'; } else { prompt.id = 'composer-input'; prompt.className = 'rich-input'; }
+  prompt.innerHTML = '<p><br></p>';
+  document.getElementById('prompt-slot').appendChild(prompt);
+
+  if (!NOFILEINPUT) {
+    fileInput = document.createElement('input'); fileInput.type = 'file'; fileInput.multiple = true; fileInput.hidden = true;
+    if (V === 2) fileInput.setAttribute('data-upload', '1');
+    document.getElementById('input-slot').appendChild(fileInput);
+    fileInput.addEventListener('change', function () { addFiles(Array.prototype.slice.call(fileInput.files)); });
+  }
+  sendBtn = document.createElement('button'); sendBtn.type = 'button'; sendBtn.textContent = 'Send'; sendBtn.setAttribute('data-testid', ID.send); sendBtn.setAttribute('aria-label', 'Send prompt'); sendBtn.disabled = true;
+  document.getElementById('btn-slot').appendChild(sendBtn);
+  stopBtn = document.createElement('button'); stopBtn.type = 'button'; stopBtn.textContent = 'Stop'; stopBtn.setAttribute('data-testid', ID.stop); stopBtn.setAttribute('aria-label', 'Stop streaming');
+
+  function text() { return (prompt.textContent || '').trim(); }
+  function refresh() { sendBtn.disabled = streaming || uploading || (!text() && !files.length); }
+  prompt.addEventListener('input', refresh);
+  prompt.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sendBtn.disabled) doSend(); } });
+  prompt.addEventListener('paste', function (e) {
+    var cd = e.clipboardData; if (!cd) return;
+    if (cd.files && cd.files.length) { e.preventDefault(); addFiles(Array.prototype.slice.call(cd.files)); return; }
+    var t = cd.getData('text/plain'); if (t) { e.preventDefault(); (typeof document.execCommand === 'function' && document.execCommand('insertText', false, t)) || (prompt.textContent += t); prompt.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  prompt.addEventListener('dragover', function (e) { e.preventDefault(); });
+  prompt.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) addFiles(Array.prototype.slice.call(e.dataTransfer.files)); });
+
+  function addFiles(list) {
+    uploading = true; refresh();
+    setTimeout(function () { // simulated upload
+      list.forEach(function (f) {
+        files.push(f);
+        var chip = document.createElement('div'); chip.setAttribute('data-testid', ID.attach);
+        var img = document.createElement('img'); img.alt = f.name; chip.appendChild(img); attachments.appendChild(chip);
+      });
+      uploading = false; refresh();
+    }, 400);
+  }
+  sendBtn.addEventListener('click', doSend);
+
+  function doSend() {
+    if (sendBtn.disabled) return;
+    var t = text(), fs = files.slice();
+    window.__received.push({ text: t, files: fs.map(function (f) { return { name: f.name, size: f.size, type: f.type }; }) });
+    var u = document.createElement('div'); u.className = 'msg'; u.setAttribute('data-message-author-role', 'user'); u.textContent = t; thread.appendChild(u);
+    prompt.innerHTML = '<p><br></p>'; files = []; attachments.textContent = '';
+    streaming = true; sendBtn.replaceWith(stopBtn);
+    if (FAIL === 'ratelimit') { var a = document.createElement('div'); a.setAttribute('role', 'alert'); a.textContent = 'Too many requests. Please slow down.'; document.body.appendChild(a); finish(); return; }
+    var a2 = document.createElement('div'); var md;
+    setTimeout(function () {
+      a2.className = 'msg'; a2.setAttribute('data-message-author-role', 'assistant');
+      if (V === 2) { a2.removeAttribute('data-message-author-role'); a2.setAttribute('data-role', 'assistant'); }
+      md = document.createElement('div'); md.className = V === 2 ? 'prose' : 'markdown'; var p = document.createElement('p'); md.appendChild(p); a2.appendChild(md); thread.appendChild(a2);
+      var words = ['OK.', 'Received', 'your', 'request', '(' + t.length + ' chars)', 'and', fs.length ? ('a screenshot named ' + fs[0].name + ' (' + fs[0].size + ' bytes).') : 'no screenshot.'];
+      for (var i = words.length; i < NTOK; i++) words.push('word' + i);
+      var i2 = 0; var out = '';
+      timer = setInterval(function () {
+        out += (i2 ? ' ' : '') + words[i2++]; p.textContent = out;
+        if (i2 >= words.length) { clearInterval(timer); timer = null; links(md); finish(); }
+      }, SPEED);
+    }, 300);
+    stopBtn.onclick = function () { if (timer) { clearInterval(timer); timer = null; } finish(); };
+    function links(md2) {
+      var d = document.createElement('p');
+      var s = document.createElement('a'); s.href = 'sandbox:/mnt/data/result.html'; s.textContent = 'result.html'; d.appendChild(s);
+      d.appendChild(document.createTextNode(' '));
+      var o = document.createElement('a'); o.href = 'https://files.oaiusercontent.com/file-abc/notes.txt'; o.setAttribute('download', 'notes.txt'); o.textContent = 'notes.txt'; d.appendChild(o);
+      d.appendChild(document.createTextNode(' '));
+      var x = document.createElement('a'); x.href = 'https://example.org/docs'; x.textContent = 'docs'; d.appendChild(x);
+      md2.appendChild(d);
+      if (HTMLDOC) { var pre = document.createElement('pre'); var code = document.createElement('code'); code.textContent = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>Updated</title></head><body><h1>Family owned since 1998</h1></body></html>'; pre.appendChild(code); md2.appendChild(pre); }
+      s.addEventListener('click', function (e) { e.preventDefault(); window.__events.push('sandbox-click'); });
+    }
+    function finish() { streaming = false; stopBtn.replaceWith(sendBtn); refresh(); }
+  }
+})();
+</script></body></html>

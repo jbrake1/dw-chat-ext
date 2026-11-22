@@ -1,0 +1,46 @@
+/* DW Chat Integration: chat-tab content script (generic).
+ * Receives {instr, job} from the service worker and hands them to the interpreter/runner. It knows nothing about
+ * the chat site's DOM; all of that is in `instr` (the site instructions JSON). */
+(function () {
+  'use strict';
+  if (window.__dwGpt) return;
+  window.__dwGpt = true;
+  var current = null; // {jobId, ctl, keepalive}
+
+  function send(msg) { try { return chrome.runtime.sendMessage(msg).catch(function () {}); } catch (e) { return null; } }
+  function clear() { if (current && current.keepalive) clearInterval(current.keepalive); current = null; }
+
+  function start(msg) {
+    var jobId = msg.jobId;
+    var instr = msg.instr;
+    function emit(evt) {
+      send({ type: 'gpt:event', jobId: jobId, event: evt });
+      if (evt.kind === 'done' || (evt.kind === 'error' && evt.fatal)) clear();
+    }
+    if (!instr.match.hosts.some(function (h) { return location.hostname === h; })) {
+      emit({ kind: 'error', step: 'run', code: 'host_mismatch', sent: false, fatal: true });
+      return;
+    }
+    var ctl = DWX.runJob(window, instr, msg.job, { emit: emit });
+    // Keeps the MV3 service worker from idling out while the reply is slow to start. Not DOM polling.
+    current = { jobId: jobId, ctl: ctl, keepalive: setInterval(function () { send({ type: 'gpt:keepalive' }); }, 20000) };
+  }
+
+  chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (sender.id !== chrome.runtime.id) return;
+    switch (msg && msg.type) {
+      case 'gpt:ping': sendResponse({ ok: true }); break;
+      case 'gpt:run':
+        if (current) { sendResponse({ ok: false, code: 'busy' }); break; }
+        start(msg); sendResponse({ ok: true }); break;
+      case 'gpt:control':
+        if (!current || current.jobId !== msg.jobId) { sendResponse({ ok: false }); break; }
+        if (msg.action === 'stop') current.ctl.stop();
+        else if (msg.action === 'pause') current.ctl.pause();
+        else if (msg.action === 'resume') current.ctl.resume();
+        else if (msg.action === 'openFile') current.ctl.openFile(msg.id);
+        else if (msg.action === 'abort') { current.ctl.abort(); clear(); }
+        sendResponse({ ok: true }); break;
+    }
+  });
+})();

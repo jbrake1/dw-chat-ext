@@ -1,0 +1,26 @@
+{
+  "name": "dw-chat-ext",
+  "version": "0.1.0",
+  "description": "DW Chat Integration Chrome extension (MV3) + test harness",
+  "scripts": {
+    "test": "node --test --test-timeout=60000 \"test/*.test.js\"",
+    "test:e2e": "node harness/e2e.js",
+    "daily": "node harness/run-daily.js",
+    "daily:live": "node harness/run-daily.js --mode live --yes-send",
+    "health": "node harness/health-check.js --idle harness/snapshots/mock-idle.html --typing harness/snapshots/mock-typing.html --streaming harness/snapshots/mock-streaming.html --replied harness/snapshots/mock-replied.html --expect-files",
+    "login": "node harness/login.js",
+    "snapshots:mock": "node harness/make-mock-snapshots.js",
+    "build:test": "node scripts/build-test.js",
+    "sync-hosts": "node scripts/sync-hosts.js",
+    "seal": "node scripts/seal-instructions.js",
+    "package": "node scripts/package.js",
+    "mock": "node mock/server.js"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "jsdom": "^31.0.1",
+    "playwright": "^1.65.1"
+  },
+  "private": true
+}

@@ -1,0 +1,18 @@
+{
+  "dwBase": "https://app.dwalliance.com",
+  "instructionsPath": "/_dw/ext/sites/{site}.json",
+  "reportPath": "/_dw/ext/report",
+  "refreshMinutes": 1440,
+  "aiSites": {
+    "chatgpt.com": "chatgpt"
+  },
+  "dwHosts": [
+    "app.dwalliance.com",
+    "mingapothecary.com",
+    "www.mingapothecary.com"
+  ],
+  "passPublicKeyJwk": null,
+  "instructionsPublicKeyJwk": null,
+  "promptTemplate": "I am editing the website {host}. This is the page: {pageUrl}\nThe attached image is a screenshot of that page. The change I want is marked on it in red.\nRequested change: {note}\nPlease tell me exactly what to change (the text, HTML or CSS), and give any updated file as a download.",
+  "allowDevOverride": false
+}

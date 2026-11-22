@@ -1,0 +1,30 @@
+# Dependencies and build output
+node_modules/
+.build/
+dist/
+
+# Harness output
+harness/results/
+*.log
+
+# Browser profiles used by the live harness (never commit these)
+.dw-chat-ext-test-profile/
+harness/profiles/
+*-profile/
+**/dwx-profile-*/
+
+# Keys and local overrides
+*.pem
+*.jwk
+.env
+.env.*
+
+# Temporary output
+tmp/
+*.tmp
+*.temp
+
+# OS / editor
+.DS_Store
+*.swp
+*~

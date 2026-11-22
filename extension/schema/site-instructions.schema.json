@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app.dwalliance.com/_dw/ext/schema/site-instructions.v1.json",
+  "title": "DW Chat Integration site instructions (schemaVersion 1)",
+  "description": "Declarative description of how to drive one chat site's web UI. Data only: the extension never executes anything from this file. Every step lists selectors in priority order (index 0 = primary, later entries = fallbacks).",
+  "type": "object",
+  "required": ["schemaVersion", "site", "revision", "version", "minExtVersion", "match", "flow", "steps", "stream"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "site": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$" },
+    "revision": { "type": "integer", "minimum": 1, "description": "Monotonic. The extension rejects a remote file whose revision is lower than the one it already has." },
+    "version": { "type": "string", "pattern": "^[0-9A-Za-z._-]{1,32}$", "description": "Human readable, reported in error reports as instructionsVersion." },
+    "minExtVersion": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,3}$" },
+    "verified": { "type": "boolean", "description": "false = selectors are best-effort and have not been confirmed against the live site." },
+    "notes": { "type": "string", "maxLength": 2000 },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "enum": ["sha256", "sha256+ed25519"] },
+        "hash": { "type": "string", "pattern": "^([0-9a-f]{64})?$", "description": "sha256 hex of canonical JSON of this document without the integrity field. Empty = placeholder (not checked)." },
+        "sig": { "type": "string", "maxLength": 200, "description": "base64url Ed25519 signature over the hash string. Checked when the extension is configured with a public key." },
+        "keyId": { "type": "string", "maxLength": 40 }
+      }
+    },
+    "match": {
+      "type": "object", "required": ["hosts"], "additionalProperties": false,
+      "properties": { "hosts": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "pattern": "^[a-z0-9.-]{3,80}$" } } }
+    },
+    "flow": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "enum": ["text", "attach", "send"] }, "description": "Order of the input steps." },
+    "steps": {
+      "type": "object",
+      "required": ["prompt", "attach", "send", "stop", "assistantMessage"],
+      "additionalProperties": false,
+      "properties": {
+        "loggedOut": { "$ref": "#/definitions/selectorStep" },
+        "prompt": {
+          "type": "object", "required": ["selectors"], "additionalProperties": false,
+          "properties": {
+            "selectors": { "$ref": "#/definitions/selectors" },
+            "timeoutMs": { "type": "integer", "minimum": 500, "maximum": 120000 },
+            "setText": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "enum": ["execCommand", "paste", "textContent"] } },
+            "clearFirst": { "type": "boolean" }
+          }
+        },
+        "attach": {
+          "type": "object", "required": ["strategies"], "additionalProperties": false,
+          "properties": {
+            "strategies": {
+              "type": "array", "minItems": 1, "maxItems": 4,
+              "items": {
+                "type": "object", "required": ["type"], "additionalProperties": false,
+                "properties": {
+                  "type": { "enum": ["fileInput", "paste", "drop"] },
+                  "selectors": { "$ref": "#/definitions/selectors" },
+                  "waitMs": { "type": "integer", "minimum": 0, "maximum": 30000 }
+                }
+              }
+            },
+            "confirm": {
+              "type": "object", "required": ["selectors"], "additionalProperties": false,
+              "properties": { "selectors": { "$ref": "#/definitions/selectors" }, "timeoutMs": { "type": "integer", "minimum": 500, "maximum": 120000 } }
+            }
+          }
+        },
+        "send": {
+          "type": "object", "required": ["selectors"], "additionalProperties": false,
+          "properties": {
+            "selectors": { "$ref": "#/definitions/selectors" },
+            "timeoutMs": { "type": "integer", "minimum": 500, "maximum": 180000 },
+            "requireEnabled": { "type": "boolean" },
+            "fallbackKey": { "enum": ["Enter"] }
+          }
+        },
+        "stop": { "$ref": "#/definitions/selectorStep" },
+        "assistantMessage": {
+          "type": "object", "required": ["selectors"], "additionalProperties": false,
+          "properties": {
+            "selectors": { "$ref": "#/definitions/selectors" },
+            "textSelectors": { "$ref": "#/definitions/selectors" },
+            "pick": { "enum": ["last", "first-new"] }
+          }
+        },
+        "files": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "allowedHosts": { "type": "array", "maxItems": 20, "items": { "type": "string", "pattern": "^[a-z0-9.-]{3,80}$" } },
+            "links": { "type": "array", "maxItems": 6, "items": { "$ref": "#/definitions/fileEntry" } },
+            "images": { "type": "array", "maxItems": 6, "items": { "$ref": "#/definitions/fileEntry" } }
+          }
+        },
+        "errors": {
+          "type": "array", "maxItems": 10,
+          "items": {
+            "type": "object", "required": ["selectors", "code"], "additionalProperties": false,
+            "properties": { "selectors": { "$ref": "#/definitions/selectors" }, "code": { "type": "string", "pattern": "^[a-z_]{1,40}$" } }
+          }
+        }
+      }
+    },
+    "stream": {
+      "type": "object", "required": ["done"], "additionalProperties": false,
+      "properties": {
+        "startTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 },
+        "maxDurationMs": { "type": "integer", "minimum": 5000, "maximum": 3600000 },
+        "noReplyGraceMs": { "type": "integer", "minimum": 500, "maximum": 120000, "description": "After the stop button was seen and went away without any assistant message being found, wait this long, then fail with no_reply (stale reply selector)." },
+        "emitMinIntervalMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+        "done": {
+          "type": "object", "required": ["all"], "additionalProperties": false,
+          "properties": {
+            "all": {
+              "type": "array", "minItems": 1, "maxItems": 8,
+              "items": {
+                "anyOf": [
+                  { "type": "object", "required": ["type"], "additionalProperties": false, "properties": { "type": { "const": "newMessage" } } },
+                  { "type": "object", "required": ["type", "step"], "additionalProperties": false, "properties": { "type": { "enum": ["present", "absent"] }, "step": { "enum": ["stop"] } } },
+                  { "type": "object", "required": ["type", "ms"], "additionalProperties": false, "properties": { "type": { "const": "textStable" }, "ms": { "type": "integer", "minimum": 0, "maximum": 60000 }, "allowEmpty": { "type": "boolean" } } },
+                  { "type": "object", "required": ["type", "ms"], "additionalProperties": false, "properties": { "type": { "const": "minElapsedMs" }, "ms": { "type": "integer", "minimum": 0, "maximum": 600000 } } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "selector": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 300 },
+        {
+          "type": "object", "required": ["css"], "additionalProperties": false,
+          "properties": {
+            "css": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "textMatches": { "type": "string", "maxLength": 120, "description": "Case-insensitive regex tested against the element's text plus aria-label." },
+            "visible": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "selectors": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "$ref": "#/definitions/selector" } },
+    "selectorStep": {
+      "type": "object", "required": ["selectors"], "additionalProperties": false,
+      "properties": { "selectors": { "$ref": "#/definitions/selectors" } }
+    },
+    "fileEntry": {
+      "type": "object", "required": ["selectors"], "additionalProperties": false,
+      "description": "Unlike other steps, ALL selectors here are collected (union), not first-match.",
+      "properties": { "selectors": { "$ref": "#/definitions/selectors" }, "kind": { "enum": ["file", "link"] } }
+    }
+  }
+}

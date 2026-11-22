@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>DW Chat Integration</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <h1>DW Chat Integration <small id="ver"></small></h1>
+  <section>
+    <div class="row"><span class="dot" id="dot-this"></span><span id="this-status">…</span></div>
+    <div class="row"><span class="dot" id="dot-pair"></span><span id="pair-status">…</span></div>
+    <div class="btns">
+      <button id="pair" type="button">Pair this tab</button>
+      <button id="unpair" type="button">Unpair</button>
+    </div>
+    <div class="hint" id="pair-hint"></div>
+  </section>
+  <section>
+    <div class="label">Site instructions</div>
+    <div id="instr" class="small">…</div>
+    <div class="btns"><button id="refresh" type="button">Check for update</button></div>
+  </section>
+  <section id="enable-box" hidden>
+    <div class="label">This site</div>
+    <div class="small">This site is not on the built-in list. Allow DW Chat Integration to run on it?</div>
+    <div class="btns"><button id="enable" type="button">Enable on <span id="enable-host"></span></button></div>
+  </section>
+  <section>
+    <label class="small"><input type="checkbox" id="reports"> Send anonymous error reports (site, step, versions, error code only; never prompts, replies or screenshots)</label>
+  </section>
+  <script src="popup.js"></script>
+</body></html>

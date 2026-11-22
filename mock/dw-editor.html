@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock Ming Apothecary</title>
+<style>body{font-family:Georgia,serif;margin:0}header{background:#1f4d2b;color:#fff;padding:14px 20px}main{padding:20px}</style></head>
+<body>
+<header><h1>Ming Apothecary (mock)</h1></header>
+<main><h2>Welcome to our shop</h2><p>Family owned since 1998. Herbs, teas and tinctures.</p><p id="status"></p></main>
+<script>
+/* Mock of the DW "Suggest an edit" tool (what /markup/markup.js does today) plus an optional native hook.
+ *   ?hook=1            page emits/consumes the dw-ext-* protocol itself (what edit.js/markup.js should do)
+ *   &panel=1           page says it renders its own panel (the extension then injects none)
+ *   (no hook)          unmodified behaviour: only POSTs /markup/ - the extension taps that request
+ */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var HOOK = q.get('hook') === '1', OWN_PANEL = q.get('panel') === '1';
+  window.__dwEvents = [];
+  if (HOOK) {
+    window.addEventListener('message', function (e) {
+      if (e.source !== window || !e.data || e.data.source !== 'dw-ext') return;
+      window.__dwEvents.push(e.data);
+      if (e.data.type === 'dw-ext-ready') hello();
+    });
+    hello();
+  }
+  function hello() { window.postMessage({ source: 'dw-edit', type: 'dw-ext-hello', v: 1, panel: OWN_PANEL, wantEvents: true }, location.origin); }
+
+  fetch('/_dw/whoami', { credentials: 'include', cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+    if (!j || j.edit !== true) { document.getElementById('status').textContent = 'Not signed in as an editor.'; return; }
+    mount();
+  });
+
+  function el(tag, attrs, text) { var e = document.createElement(tag); for (var k in (attrs || {})) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+  function mount() {
+    var host = el('div', { id: 'dw-markup-root', 'data-html2canvas-ignore': 'true' });
+    var root = host.attachShadow({ mode: 'open' });
+    root.appendChild(el('style', null, '.notebox{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:12px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.28)}textarea{width:100%;height:92px}.bar{position:fixed;left:50%;top:14px;z-index:2147483647}'));
+    var fab = el('button', { class: 'fab', type: 'button' }, 'Suggest an edit');
+    root.appendChild(fab);
+    document.documentElement.appendChild(host);
+    function start() {
+      fab.style.display = 'none';
+      var bar = el('div', { class: 'bar' }); var send = el('button', { class: 'send', 'data-act': 'send', type: 'button' }, 'Send'); bar.appendChild(send);
+      var nb = el('div', { class: 'notebox' }); var ta = el('textarea', { id: 'dw-mk-note', maxlength: '5000' }); nb.appendChild(ta);
+      root.appendChild(bar); root.appendChild(nb);
+      send.addEventListener('click', function () {
+        // same shape as markup.js: image blob + note + page_url + selectors
+        fetch('/__shot.jpg').then(function (r) { return r.blob(); }).then(function (blob) {
+          var fd = new FormData();
+          fd.append('a', 'submit'); fd.append('brand', 'x'); fd.append('note', ta.value); fd.append('page_url', location.href);
+          fd.append('capture', 'full page 480x300 from y=0'); fd.append('viewport', '1280x720@1'); fd.append('selectors', JSON.stringify(['h2']));
+          fd.append('image', blob, 'markup.jpg');
+          var dataUrl = null;
+          return fetch('/markup/', { method: 'POST', credentials: 'same-origin', headers: { 'X-DW-Markup': '1', 'X-DW-CSRF': 'x' }, body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              if (j && j.ok) {
+                if (HOOK) { var fr = new FileReader(); fr.onload = function () { window.postMessage({ source: 'dw-edit', type: 'dw-ext-submit', v: 1, id: String(j.id), screenshot: String(fr.result), note: ta.value, pageUrl: location.href, element: { selectors: ['h2'], capture: 'full page', viewport: '1280x720@1' } }, location.origin); finishUi(); }; fr.readAsDataURL(blob); }
+                else finishUi();
+              }
+            });
+        });
+        function finishUi() { bar.remove(); nb.remove(); fab.style.display = ''; document.getElementById('status').textContent = 'Thanks! Your edit request was sent.'; }
+      });
+    }
+    fab.addEventListener('click', start);
+    if (location.hash === '#suggest-edit') start();
+    window.addEventListener('hashchange', function () { if (location.hash === '#suggest-edit') start(); });
+  }
+})();
+</script></body></html>
