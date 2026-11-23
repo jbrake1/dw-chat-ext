@@ -47,20 +47,62 @@ See [API.md](API.md) for the three site endpoints and the optional page-message 
 - `optional_host_permissions: ["https://*/*"]` is **only a request mechanism, nothing is granted by it**: on a DW customer site that is not on the list, the popup shows **Enable on this site**; you click, Chrome asks, and only that one origin is granted and its content script registered. (Chrome requires a broad pattern here to allow arbitrary customer domains later.)
 - Adding a domain permanently: edit `hosts.json`, run `npm run sync-hosts` (rewrites the manifest matches and `config.json` `dwHosts`), bump the version, package. A unit test checks `hosts.json` and the manifest agree.
 
-## Install (Load unpacked)
+## Install
 
-From a [release zip](https://github.com/jbrake1/dw-chat-ext/releases) or from this repo:
+A standalone copy of these steps is in [INSTALL.md](INSTALL.md). Chrome is the supported browser (version 120 or later). The extension is not in the Chrome Web Store yet, so you load the zip yourself.
 
-1. Unzip the release, or clone the repo (the folder to load is `extension/`).
-2. Open `chrome://extensions`.
-3. Turn on **Developer mode**.
-4. Click **Load unpacked** and choose the `extension/` folder (the one that contains `manifest.json`).
+**Download:** [dw-chat-ext-v0.1.0.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.0.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.0 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.0). Optional check: the zip’s md5 is `321bfae3f98070bdbdffb8eeb9f5750a`.
 
-Since Chrome 137, branded Google Chrome ignores `--load-extension` on the command line; use the UI above, or Chromium / Chrome for Testing.
+### Load it in Chrome
 
-Then: sign in to the DW site you want to edit, open ChatGPT in another tab, pair that tab from the extension popup, and append `#suggest-edit` to the page URL (or open the editor the usual way).
+1. **Download the zip** and unzip it into its own folder. Put that folder somewhere you will keep, such as Documents — not a temporary place you empty later. Chrome reads the extension from this folder, so do not move or delete it after you install.
+2. **Open the unzipped folder.** You should see a file named `manifest.json` right there, next to folders such as `background`, `content`, `icons`, and `popup`. If you only see a single folder, open that folder and look again. (If you cloned this repository instead, the folder to load is `extension/`.)
+3. In Chrome’s address bar, go to `chrome://extensions`.
+4. Turn on **Developer mode**. The switch is usually in the top right.
+5. Click **Load unpacked** and choose the folder that contains `manifest.json`.
+6. Pin it for easy access: click the puzzle-piece **Extensions** icon on the Chrome toolbar, find **DW Chat Integration**, and click the pin.
 
-The packaged zip on [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html) is the same `extension/` tree. Until a site issues an editor pass, the icon stays grey and the extension will not touch ChatGPT.
+You may see a Chrome warning that this extension is in developer mode. That is normal for an extension you load this way.
+
+### Pair ChatGPT, then use it on your site
+
+1. Open [chatgpt.com](https://chatgpt.com) in a tab and sign in.
+2. While that ChatGPT tab is in front, click the **DW Chat Integration** icon and click **Pair this tab**. The popup should say **Paired with:** followed by the tab title, and an **AI** badge appears on the icon for that tab. If **Pair this tab** is unavailable, the popup hint is: “To pair: open chatgpt.com in a tab, sign in, then click this icon there.”
+3. Open your DW Alliance site and sign in as an editor.
+4. Open **Suggest an edit** on the page (or add `#suggest-edit` to the end of the page address).
+5. If the popup says “This site is not on the built-in list. Allow DW Chat Integration to run on it?”, click **Enable on** that site’s name and approve Chrome’s permission prompt.
+
+When the extension is active, the toolbar icon turns green and a **ChatGPT relay** panel appears above the editor’s typing area. Circle or point at what you want to change, type your note, and press **Send**. Your screenshot and note go to the paired ChatGPT tab, and the reply streams into the panel. Nothing is sent until you press Send.
+
+In the panel you can use **Stop**, **Pause**, **Resume**, and **Unpair**. There is also a checkbox: **Also send my request to ChatGPT when I press Send**.
+
+Closing the ChatGPT tab, or navigating that tab away from chatgpt.com, unpairs it. You can pair again from the ChatGPT tab at any time. Only one chat tab can be paired at once. Until the site confirms you are a signed-in editor, the icon stays grey and the extension will not touch ChatGPT.
+
+### Update to a new version
+
+1. Download the new zip.
+2. Unzip it and replace the files in the **same folder** you loaded before. Leave that folder where it is.
+3. Open `chrome://extensions` and click the reload icon on the **DW Chat Integration** card.
+
+You do not need to click **Load unpacked** again unless you moved the folder.
+
+### Remove it
+
+1. Open `chrome://extensions`.
+2. On the **DW Chat Integration** card, click **Remove** and confirm.
+3. You can then delete the unzipped folder if you no longer need it.
+
+### If something goes wrong
+
+- **“Manifest file is missing” or “Manifest file is missing or unreadable.”** You picked the wrong folder. Choose the folder that itself contains `manifest.json`. If unzipping created an extra nested folder, go one level in.
+- **Chrome warns about Developer mode or unpacked extensions.** That is expected until the extension is in the Chrome Web Store.
+- **The icon stays grey on your site.** Sign in as an editor, open **Suggest an edit**, and if the popup asks, click **Enable on** that site. If Suggest an edit is not enabled on that site yet, the extension will not switch on.
+- **The popup says “No chat tab paired,” or the panel says “ChatGPT relay: no tab paired.”** Open chatgpt.com, sign in, click the **DW Chat Integration** icon **on that tab**, and click **Pair this tab**.
+- **ChatGPT is not responding, or you see “ChatGPT tab is not signed in” or “could not reach the ChatGPT tab.”** Refresh the ChatGPT tab, sign in again, and re-pair. Closing the tab or leaving chatgpt.com unpairs it automatically.
+- **“Not sent: the site did not confirm you are an editor.”** Sign in again as an editor. If the editor is not enabled on that site yet, ask DW to turn it on.
+- **The extension stopped working after you moved or deleted the folder.** Put the folder back (or unzip the zip again), then use **Load unpacked** and choose it once more.
+
+Chrome is the supported browser. Nothing in the extension is written to block other Chromium browsers. In Microsoft Edge or Brave you can try the same steps from `edge://extensions` or `brave://extensions` (Developer mode, then **Load unpacked**). If anything looks different, use Chrome.
 
 ### Local demo with the mocks (no live site needed)
 
@@ -71,6 +113,8 @@ npm run build:test    # writes .build/test-ext (localhost allowed; not the shipp
 ```
 
 Load `.build/test-ext` unpacked. Open the ChatGPT mock, pair it, visit the mock DW `/__login` once, then open the mock editor and use *Suggest an edit*.
+
+Since Chrome 137, branded Google Chrome ignores `--load-extension` on the command line; use **Load unpacked** in the UI, or Chromium / Chrome for Testing.
 
 ## The thin shell: site instructions
 
@@ -174,8 +218,10 @@ The test build (`scripts/build-test.js`) differs from `extension/` only by: `htt
 
 ## Troubleshooting
 
-- Icon stays grey on the DW page: you are not signed in as an editor (`/_dw/whoami` says `edit: false`), the site has not issued an editor pass, or the site is not enabled (popup → Enable on this site).
-- Panel says "no tab paired": pair from the ChatGPT tab's popup.
+For install, pairing and everyday use, see [If something goes wrong](#if-something-goes-wrong) or [INSTALL.md](INSTALL.md).
+
+- Icon stays grey on the DW page: you are not signed in as an editor (`/_dw/whoami` says `edit: false`), the site has not issued an editor pass, or the site is not enabled (popup → **Enable on** this site).
+- Panel says "ChatGPT relay: no tab paired": pair from the ChatGPT tab's popup (**Pair this tab**).
 - "Relay problem at step …": the step name and error code are shown; the popup lists the instruction version in use and the last update check.
 
 ## License
