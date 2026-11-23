@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1 — 2026-11-23
+
+- Suggest an edit shows a compact extension status line: not installed (with a link to the install page), installed but the site is not enabled or the editor is unconfirmed, installed but not paired, or paired with ChatGPT. The line updates live when you pair or unpair.
+- New `dw-ext-status` page message (origin-checked). The page only receives the extension version, a paired flag, an allowlisted AI id (currently `chatgpt`), the instructions revision, and whether the site confirmed an editor pass. Tab titles and chat content are not sent.
+- Site-instruction (pattern) updates are fetched from the static file `https://dwalliance.com/editor-ai/patterns/<ai>.json` (first: `chatgpt.json`), not from `/_dw/ext/sites/`. Seal verification, ETag / If-None-Match, and the bundled fallback are unchanged. The URL is configurable for staging (`instructionsUrl`).
+- Includes the existing reply-panel docking fix from the v0.1.0 source tree (panel sits above the editor note box, or above the Suggest an edit button when the editor is closed). Production pass-key handling is unchanged (`passPublicKeyJwk` remains unset on the shipped tree; the staging build still injects the staging public key).
+
+The packaged zip is `dw-chat-ext-v0.1.1.zip` (64,294 bytes), md5 `fb668aad7cf18bf880c62d956a7928a7`. Official download: [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html). Version 0.1.0 remains available on that page.
+
 ## v0.1.0 — 2026-11-22
 
 First public release of the DW Chat Integration Chrome extension (Manifest V3).

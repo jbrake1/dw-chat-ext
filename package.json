@@ -1,6 +1,6 @@
 {
   "name": "dw-chat-ext",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DW Chat Integration Chrome extension (MV3) + test harness",
   "scripts": {
     "test": "node --test --test-timeout=60000 \"test/*.test.js\"",

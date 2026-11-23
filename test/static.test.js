@@ -32,8 +32,13 @@ test('hosts.json matches manifest and config (run npm run sync-hosts if this fai
   const c = JSON.parse(fs.readFileSync(path.join(root, 'extension/config.json'), 'utf8'));
   assert.deepEqual(m.content_scripts[0].matches, h.dw.map((x) => `https://${x}/*`));
   assert.deepEqual(m.content_scripts[1].matches, h.ai.map((x) => `https://${x}/*`));
-  assert.deepEqual(m.host_permissions, [...h.ai, ...h.dw].map((x) => `https://${x}/*`));
+  assert.deepEqual(m.host_permissions, [...h.ai, ...h.dw, ...(h.patterns || [])].map((x) => `https://${x}/*`));
   assert.deepEqual(c.dwHosts, h.dw);
+  assert.ok((h.patterns || []).includes('dwalliance.com'));
+  assert.ok(m.host_permissions.includes('https://dwalliance.com/*'));
+  assert.equal(m.content_scripts[0].matches.includes('https://dwalliance.com/*'), false, 'patterns host is fetch-only');
+  assert.equal(c.instructionsUrl, 'https://dwalliance.com/editor-ai/patterns/{site}.json');
+  assert.equal(c.instructionsUrl.includes('/_dw/ext/sites'), false);
   assert.equal(c.allowDevOverride, false, 'shipped build must not allow dev overrides');
 });
 

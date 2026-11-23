@@ -107,3 +107,40 @@ test('choose: remote wins only if newer than bundled and compatible; bundled win
   const newer = Object.assign(bundled(), { revision: B + 8 });
   assert.equal(Ins.choose(cached(B + 1), newer, '0.2.0').source, 'bundled');
 });
+
+test('instructionFileUrl prefers the static patterns URL and stays configurable', () => {
+  assert.equal(
+    Ins.instructionFileUrl({ instructionsUrl: 'https://dwalliance.com/editor-ai/patterns/{site}.json' }, 'chatgpt'),
+    'https://dwalliance.com/editor-ai/patterns/chatgpt.json'
+  );
+  assert.equal(
+    Ins.instructionFileUrl({ instructionsUrl: 'http://dwalliance.localhost:8081/editor-ai/patterns/{site}.json', dwBase: 'https://app.dwalliance.com' }, 'chatgpt'),
+    'http://dwalliance.localhost:8081/editor-ai/patterns/chatgpt.json'
+  );
+});
+
+test('instructionFileUrl does not fall back to app.dwalliance.com when instructionsUrl is missing', () => {
+  const live = 'https://dwalliance.com/editor-ai/patterns/chatgpt.json';
+  assert.equal(Ins.instructionFileUrl({ dwBase: 'https://app.dwalliance.com', instructionsPath: '/editor-ai/patterns/{site}.json' }, 'chatgpt'), live);
+  assert.equal(Ins.instructionFileUrl({ dwBase: 'https://app.dwalliance.com', instructionsPath: '/_dw/ext/sites/{site}.json' }, 'chatgpt'), live);
+  assert.equal(Ins.instructionFileUrl({ dwBase: 'http://localhost:8081' }, 'chatgpt'), live);
+  assert.equal(Ins.instructionFileUrl({}, 'chatgpt'), live);
+  assert.equal(Ins.instructionFileUrl({ instructionsUrl: '' }, 'chatgpt'), live);
+  assert.equal(Ins.instructionFileUrl({ instructionsUrl: '   ' }, 'chatgpt'), live);
+});
+
+test('production config fetches the live patterns URL successfully', async () => {
+  const cfg = require('../extension/config.json');
+  const url = Ins.instructionFileUrl(cfg, 'chatgpt');
+  assert.equal(url, 'https://dwalliance.com/editor-ai/patterns/chatgpt.json');
+  const res = await fetch(url, { cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' } });
+  assert.equal(res.status, 200, 'live patterns URL status');
+  assert.match(String(res.headers.get('content-type') || ''), /application\/json/i);
+  const text = await res.text();
+  const v = await Ins.validateRemote(text, ctx({ extVersion: '0.1.1', floorRevision: 0 }));
+  assert.equal(v.ok, true, JSON.stringify({ code: v.code, errors: v.errors }));
+  assert.equal(v.instr.site, 'chatgpt');
+  assert.ok(v.instr.revision >= 2, 'expected published revision >= 2, got ' + v.instr.revision);
+  // ETag values are not stable across nodes, so a second fetch is not required to be 304.
+  // refresh() treats an identical revision/body as unchanged.
+});

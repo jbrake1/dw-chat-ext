@@ -17,7 +17,7 @@
   var V = q.get('v') === '2' ? 2 : 1;
   var SPEED = Number(q.get('speed') || 30), NTOK = Number(q.get('tokens') || 40), FAIL = q.get('fail');
   var NOFILEINPUT = q.get('fileinput') === '0', LOGGEDOUT = q.get('loggedout') === '1';
-  var HTMLDOC = q.get('html') === '1';  // reply also contains a whole updated page in a code box
+  var HTMLDOC = q.get('html') === '1';  // reply also contains a whole updated page in a code box (staging e2e)
   var ID = { 1: { prompt: 'prompt-textarea', send: 'send-button', stop: 'stop-button', attach: 'attachment-thumbnail' },
              2: { prompt: 'composer-input', send: 'composer-send', stop: 'composer-halt', attach: 'composer-file-chip' } }[V];
   var thread = document.getElementById('thread'), attachments = document.getElementById('attachments');

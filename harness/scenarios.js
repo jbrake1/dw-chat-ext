@@ -7,10 +7,25 @@ const { root } = L;
 const FIXTURE_SIZE = fs.statSync(path.join(root, 'harness/fixtures/sample-screenshot.jpg')).size;
 const NOTE = 'Change the headline to "Family owned since 1998"';
 
-async function makeEnv({ extDir, headless = true, profileDir, live = false, liveChatUrl, dwBase, reports = true }) {
+async function makeEnv({ extDir, headless = true, profileDir, live = false, liveChatUrl, dwBase, instructionsUrl, reports = true }) {
   const mock = await startMock();
   const { ctx, sw, dir } = await L.launch({ profileDir, extDir, headless, direct: live });
-  await L.setDev(sw, { dwBase: dwBase || mock.dwUrl });
+  const base = dwBase || mock.dwUrl;
+  const dev = { dwBase: base };
+  // Mock/tests fetch patterns from the mock host. A live run keeps the shipped
+  // https://dwalliance.com/editor-ai/patterns/{site}.json unless an override is passed.
+  if (instructionsUrl) dev.instructionsUrl = instructionsUrl;
+  else if (!live) dev.instructionsUrl = base.replace(/\/$/, '') + '/editor-ai/patterns/{site}.json';
+  await L.setDev(sw, dev);
+  // SW install may have already fetched the production patterns URL (live, rev 2)
+  // before setDev pointed it at the mock. Wait out that refresh, then drop the cache
+  // so later scenario refreshes are not 304/unchanged against the live file.
+  await sw.evaluate(async () => {
+    try { if (self.__dw && self.__dw.refreshInstructions) await self.__dw.refreshInstructions('dev-repoint'); } catch (e) {}
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter((k) => k.startsWith('instr:') || k.startsWith('instrStatus:'));
+    if (keys.length) await chrome.storage.local.remove(keys);
+  });
   if (!reports) await sw.evaluate(() => chrome.storage.local.set({ reportsEnabled: false }));
   const env = { mock, ctx, sw, dir, dwUrl: mock.dwUrl, gptUrl: live ? liveChatUrl : mock.gptUrl, live, extDir };
   env.close = async () => { await ctx.close().catch(() => {}); await mock.close(); };
@@ -160,7 +175,7 @@ scenarios['signed-pass'] = async (env) => {
   const c = new L.Checks();
   const crypto = require('crypto');
   const jwk = env.mock.state.passKeys.publicKey.export({ format: 'jwk' });
-  await L.setDev(env.sw, { dwBase: env.dwUrl, passPublicKeyJwk: jwk });
+  await L.setDev(env.sw, { dwBase: env.dwUrl, instructionsUrl: env.dwUrl + '/editor-ai/patterns/{site}.json', passPublicKeyJwk: jwk });
   await env.login(); await env.openGpt('?speed=5&tokens=10'); await L.pair(env.sw, env.gptPattern);
   await L.mockApi(env.dwUrl, '/__set', { signPass: false });
   await env.openDw(); await L.sleep(1500);
@@ -258,7 +273,8 @@ scenarios['ui-change-recovery'] = async (env) => {
   c.check('redesign_breaks_bundled_instructions_visibly', !!out1.error && /no_reply|Relay problem/.test(out1.error), out1);
   const st1 = await L.mockApi(env.dwUrl, '/__state');
   const rep = st1.reports.find((r) => r.errorCode === 'no_reply');
-  c.check('anonymous_report_sent', !!rep && rep.site === 'chatgpt' && rep.step === 'stream' && rep.extVersion === '0.1.0' && rep.instructionsVersion === bundled.version && Number.isInteger(rep.ts), rep);
+  const extVer = JSON.parse(fs.readFileSync(path.join(env.extDir, 'manifest.json'), 'utf8')).version;
+  c.check('anonymous_report_sent', !!rep && rep.site === 'chatgpt' && rep.step === 'stream' && rep.extVersion === extVer && rep.instructionsVersion === bundled.version && Number.isInteger(rep.ts), rep);
   c.check('report_has_only_the_six_fields_and_no_content', st1.reports.every((r) => Object.keys(r).sort().join() === 'errorCode,extVersion,instructionsVersion,site,step,ts') && !JSON.stringify(st1.reports).includes('Family owned') && !JSON.stringify(st1.reports).includes('localhost'), st1.reports.length);
   // publish fixed instructions on the server: NO extension change, just the JSON
   const fixed = JSON.parse(JSON.stringify(bundled));
@@ -353,6 +369,73 @@ scenarios['tab-lifecycle'] = async (env) => {
   await env.logout();
   await dw.goto('about:blank'); await L.sleep(500);
   c.check('navigating_away_turns_icon_grey', (await L.iconLog(env.sw))[dwTab] === 'grey');
+  return c.steps;
+};
+
+
+scenarios['ext-status'] = async (env) => {
+  const c = new L.Checks();
+  const read = (page) => page.evaluate(() => {
+    const h = document.getElementById('dw-markup-root');
+    const b = h && h.shadowRoot && h.shadowRoot.querySelector('[data-role=ext-status]');
+    if (!b) return null;
+    const a = b.querySelector('a');
+    return { state: b.getAttribute('data-state'), text: b.querySelector('[data-role=ext-status-text]').textContent, href: a ? a.getAttribute('href') : null, on: b.classList.contains('on') };
+  });
+
+  // (a) Suggest an edit open, no extension loaded (separate process: a second
+  // chromium.launch in this Playwright process can hang indefinitely).
+  process.stderr.write('ext-status: launching bare browser for missing-extension state\n');
+  const { execFile } = require('child_process');
+  const raw = await new Promise((resolve, reject) => {
+    execFile(process.execPath, [path.join(__dirname, 'bare-status.js'), env.dwUrl + '/?hook=1&extstatus=1#suggest-edit'], { timeout: 25000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (stderr) process.stderr.write(String(stderr));
+      if (err) return reject(new Error('bare-status: ' + err.message));
+      resolve(stdout);
+    });
+  });
+  const a = JSON.parse(raw);
+  c.check('status_missing_extension', !!(a && a.state === 'missing' && a.text.indexOf('AI/SI Editor extension not installed') === 0 && a.href === 'https://dwalliance.com/editor-ai/index.html#install' && !a.on), a);
+
+  process.stderr.write('ext-status: missing-extension check done\n');
+  // (b) extension present, site has not confirmed an editor
+  process.stderr.write('ext-status: unconfirmed-editor state\n');
+  const pB = await env.ctx.newPage();
+  await pB.goto(env.dwUrl + '/?hook=1&extstatus=1#suggest-edit');
+  await pB.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
+  await L.waitFor(async () => { const s = await read(pB); return s && s.state === 'unconfirmed'; }, 8000, 'unconfirmed status');
+  const b = await read(pB);
+  c.check('status_installed_unconfirmed_editor', !!(b && b.state === 'unconfirmed' && /Installed v0\.1\.1/.test(b.text) && /Enable on this site/.test(b.text) && /Sign in as an editor/.test(b.text)), b);
+  await pB.close();
+
+  process.stderr.write('ext-status: unconfirmed check done\n');
+  // (c) signed in as editor, not paired
+  process.stderr.write('ext-status: unpaired state\n');
+  await env.login();
+  const dw = await env.openDw('?hook=1#suggest-edit');
+  await dw.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
+  await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired status');
+  const mid = await read(dw);
+  c.check('status_installed_not_paired', !!(mid && mid.state === 'unpaired' && mid.text === 'Installed v0.1.1, not paired: open chatgpt.com and click Pair this tab'), mid);
+
+  process.stderr.write('ext-status: unpaired check done\n');
+  // (d) pairing updates the line live; unpairing too
+  process.stderr.write('ext-status: pairing\n');
+  await env.openGpt('?speed=5');
+  const pr = await L.pair(env.sw, env.gptPattern);
+  c.check('paired_for_status', pr && pr.ok, pr);
+  await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'paired'; }, 8000, 'paired status');
+  const d = await read(dw);
+  c.check('status_paired_with_chatgpt', !!(d && d.state === 'paired' && d.on && d.text === 'Paired with ChatGPT (v0.1.1)'), d);
+
+  process.stderr.write('ext-status: unpairing via panel\n');
+  await dw.locator('#dw-ext-root [data-act=unpair]').click();
+  await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired after unpair');
+  const u = await read(dw);
+  c.check('status_updates_live_on_unpair', !!(u && u.state === 'unpaired' && u.text === 'Installed v0.1.1, not paired: open chatgpt.com and click Pair this tab'), u);
+
+  const leaked = await dw.evaluate(() => (window.__dwEvents || []).some((m) => m && (m.pairedTitle || m.title || (typeof m.text === 'string' && m.type === 'dw-ext-status'))));
+  c.check('status_messages_have_no_tab_title_or_chat_text', leaked === false, leaked);
   return c.steps;
 };
 

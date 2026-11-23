@@ -1,13 +1,13 @@
 /* DW Chat Integration service worker (MV3).
  * Thin router: pairs one AI chat tab, checks the editor pass, loads/validates the site instructions, hands a job to the
  * chat tab's content script and relays its events back to the DW tab. No chat-site selectors live here. */
-importScripts('../lib/util.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js');
+importScripts('../lib/util.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
 
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
 const GREEN = { 16: 'icons/green-16.png', 32: 'icons/green-32.png', 48: 'icons/green-48.png', 128: 'icons/green-128.png' };
 const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'content/chatgpt.js'];
-const DW_FILES = ['lib/util.js', 'content/panel.js', 'content/dw.js'];
+const DW_FILES = ['lib/util.js', 'lib/status.js', 'content/panel.js', 'content/dw.js'];
 const ses = chrome.storage.session, loc = chrome.storage.local;
 
 // ---------- static data ----------
@@ -102,9 +102,9 @@ async function getInstructions(siteId, forceBundled) {
 async function refreshInstructions(reason) {
   const st = await loadStatic(); const cfg = await getConfig();
   const out = {};
-  for (const siteId of Object.values(cfg.aiSites)) {
+  for (const siteId of [...new Set(Object.values(cfg.aiSites))]) {
     const r = await DWX.refresh({
-      fetch: (...a) => fetch(...a), url: cfg.dwBase + cfg.instructionsPath.replace('{site}', siteId),
+      fetch: (...a) => fetch(...a), url: DWX.instructionFileUrl(cfg, siteId),
       store, bundled: st.bundled[siteId], schema: st.schema, extVersion: EXT_VERSION, now: () => Date.now(),
       subtle: crypto.subtle, publicKeyJwk: cfg.instructionsPublicKeyJwk, siteId
     });
@@ -318,6 +318,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'dw:submit': return handleSubmit(sender, msg);
       case 'dw:control': return control(sender, msg);
       case 'dw:state': return { ok: true, state: publicState(sender.tab && sender.tab.id) };
+      case 'dw:pageStatus': {
+        const siteId = S.pair && S.pair.siteId;
+        const ai = (typeof siteId === 'string' && DWX.AI_ALLOWLIST[siteId]) ? siteId : null;
+        let revision = null;
+        if (ai) {
+          const inst = await getInstructions(ai);
+          if (inst && inst.instr && typeof inst.instr.revision === 'number') revision = inst.instr.revision;
+        }
+        return { ok: true, extVersion: EXT_VERSION, paired: !!S.pair, ai: ai, revision: revision };
+      }
       case 'gpt:event': return onGptEvent(sender, msg);
       case 'gpt:keepalive': return { ok: true };
       case 'popup:state': {

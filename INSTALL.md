@@ -1,8 +1,8 @@
 # Install DW Chat Integration
 
-These steps are for the packaged zip (version 0.1.0). Chrome is the supported browser (version 120 or later). The extension is not in the Chrome Web Store yet, so you load it yourself.
+These steps are for the packaged zip (version 0.1.1). Chrome is the supported browser (version 120 or later). The extension is not in the Chrome Web Store yet, so you load it yourself.
 
-**Download:** [dw-chat-ext-v0.1.0.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.0.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.0 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.0).
+**Download:** [dw-chat-ext-v0.1.1.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.1.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.1 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.1). Optional check: the zip’s md5 is `fb668aad7cf18bf880c62d956a7928a7`.
 
 Optional check: the zip’s md5 is `321bfae3f98070bdbdffb8eeb9f5750a`.
 

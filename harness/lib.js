@@ -29,12 +29,12 @@ async function launchDirect({ profileDir, extDir, headless }) {
   return { ctx, sw, dir: profileDir };
 }
 
-async function launch({ profileDir, extDir, headless = true, direct = false }) {
+async function launch({ profileDir, extDir, headless = true, direct = false, args = [] }) {
   if (direct && profileDir) return launchDirect({ profileDir, extDir, headless });
   const dir = profileDir || fs.mkdtempSync(path.join(os.tmpdir(), 'dwx-profile-'));
   const ctx = await chromium.launchPersistentContext(dir, {
     channel: 'chromium', headless, viewport: { width: 1100, height: 800 },
-    args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`]
+    args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, ...args]
   });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { timeout: 20000 });
   return { ctx, sw, dir };

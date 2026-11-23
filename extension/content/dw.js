@@ -2,7 +2,7 @@
  * It does nothing (no network, no panel) on a page unless the page looks like an editor session
  * (dw_ed / dw_mk hint cookie, #suggest-edit in the URL, or the editor's #dw-markup-root appears). Then it asks the
  * site (same origin, cookies included) /_dw/whoami and POST /_dw/ext/pass. Only with a valid pass does it turn on:
- * panel, green icon, and relaying of submits to the paired chat tab. See API.md for the site endpoints and the page protocol.
+ * panel, green icon, and relaying of submits to the paired chat tab. See SERVER_CONTRACT.md for the page protocol.
  */
 (function () {
   'use strict';
@@ -10,16 +10,33 @@
   window.__dwExt = true;
   var EXT_VERSION = chrome.runtime.getManifest().version;
   var S = { active: false, relay: true, state: { active: false, paired: false, paused: false, busy: false }, nativeHook: false,
-            nativePanel: false, wantEvents: false, panel: null, lastGesture: 0, jobId: null, pending: null, renewTimer: null, activating: false, cfg: {} };
+            nativePanel: false, wantEvents: false, panel: null, lastGesture: 0, jobId: null, pending: null, renewTimer: null, activating: false, activateP: null, cfg: {} };
 
   function send(msg) { return chrome.runtime.sendMessage(msg).catch(function () { return { ok: false, code: 'sw_unreachable' }; }); }
   function toPage(type, extra) { window.postMessage(Object.assign({ source: 'dw-ext', type: type, v: 1 }, extra || {}), location.origin); }
+  function emitStatus() {
+    return send({ type: 'dw:pageStatus' }).then(function (r) {
+      var st = DWX.pageStatus({
+        extVersion: EXT_VERSION,
+        paired: !!(r && r.paired),
+        ai: r && r.ai,
+        revision: r && r.revision,
+        editor: S.active
+      });
+      toPage('dw-ext-status', st);
+      return st;
+    });
+  }
+  function replyStatus() {
+    if (S.activateP) return S.activateP.then(function () { return emitStatus(); }, function () { return emitStatus(); });
+    return emitStatus();
+  }
 
   // ---------- gate ----------
   function candidate() {
     return /(?:^|;\s*)(?:dw_ed|dw_mk)=/.test(document.cookie) || location.hash === '#suggest-edit' || !!document.getElementById('dw-markup-root');
   }
-  function maybeActivate() { if (!S.active && !S.activating && candidate()) activate(); }
+  function maybeActivate() { if (!S.active && !S.activating && candidate()) return activate(); }
 
   // ---------- pass ----------
   async function fetchPass() {
@@ -37,7 +54,9 @@
   }
 
   async function activate() {
+    if (S.activateP) return S.activateP;
     S.activating = true;
+    S.activateP = (async function () {
     try {
       var p = await fetchPass();
       if (!p) return deactivate();
@@ -48,11 +67,14 @@
       applyState();
       scheduleRenew(p);
       toPage('dw-ext-ready', { paired: !!S.state.paired });
+      emitStatus();
       // Give a page that implements the hook time to answer with dw-ext-hello; only then fall back to the fetch tap.
       if (!S.tapTimer) S.tapTimer = setTimeout(function () {
         if (S.active && !S.nativeHook && !S.tapRequested) { S.tapRequested = true; send({ type: 'dw:injectTap' }); }
       }, 500);
-    } finally { S.activating = false; }
+    } finally { S.activating = false; S.activateP = null; }
+    })();
+    return S.activateP;
   }
   function scheduleRenew(p) {
     if (S.renewTimer) clearTimeout(S.renewTimer);
@@ -65,6 +87,7 @@
     if (S.renewTimer) { clearTimeout(S.renewTimer); S.renewTimer = null; }
     if (S.panel) { S.panel.destroy(); S.panel = null; }
     if (was) { send({ type: 'dw:deactivate' }); toPage('dw-ext-inactive'); }
+    emitStatus();
   }
 
   // ---------- panel ----------
@@ -82,6 +105,7 @@
   }
   function applyState() {
     if (S.panel) S.panel.setState(Object.assign({}, S.state, { active: S.active }));
+    emitStatus();
     if (S.active && S.pending && !S.state.paused && S.state.paired && !S.state.busy) { var j = S.pending; S.pending = null; submitJob(j); }
   }
 
@@ -149,7 +173,13 @@
       if (d.type === 'dw-ext-hello') {
         S.nativeHook = true; S.nativePanel = d.panel === true; S.wantEvents = d.wantEvents !== false;
         if (S.nativePanel && S.panel) { S.panel.destroy(); S.panel = null; }
-        if (S.active) toPage('dw-ext-ready', { paired: !!S.state.paired });
+        // Do not send dw-ext-ready here: a page that answers ready with hello would loop.
+        // activate() already posts ready once; this hello is answered with status only.
+        if (!S.active && candidate()) maybeActivate();
+        replyStatus();
+      } else if (d.type === 'dw-ext-status') {
+        if (!S.active && candidate()) maybeActivate();
+        replyStatus();
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
       else if (d.type === 'dw-ext-control' && S.active && ['stop', 'pause', 'resume'].indexOf(d.action) >= 0) send({ type: 'dw:control', action: d.action });
     } else if (d.source === 'dw-edit-tap' && d.type === 'dw-ext-submit') onSubmitEvent(d, 'tap');

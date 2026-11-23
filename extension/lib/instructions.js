@@ -90,5 +90,17 @@
     return { status: 'updated', revision: v.instr.revision, version: v.instr.version };
   }
 
-  return { validateRemote: validateRemote, choose: choose, refresh: refresh, withoutIntegrity: withoutIntegrity, MAX_BYTES: MAX_BYTES };
+  // Full URL for a site's sealed pattern file. Prefer config.instructionsUrl.
+  // If that is missing, fall back to the public dwalliance.com file — never dwBase
+  // (dwBase is app.dwalliance.com, which does not host /editor-ai/patterns/).
+  // Staging and tests override instructionsUrl explicitly; they do not compose it from dwBase.
+  // If the fetch fails, the bundled copy in the extension stays in use (see choose/refresh).
+  var DEFAULT_INSTRUCTIONS_URL = 'https://dwalliance.com/editor-ai/patterns/{site}.json';
+  function instructionFileUrl(cfg, siteId) {
+    var c = cfg && typeof cfg === 'object' ? cfg : {};
+    var tmpl = (typeof c.instructionsUrl === 'string' && c.instructionsUrl.trim()) ? c.instructionsUrl.trim() : DEFAULT_INSTRUCTIONS_URL;
+    return String(tmpl).replace(/\{site\}/g, String(siteId || ''));
+  }
+
+  return { validateRemote: validateRemote, choose: choose, refresh: refresh, withoutIntegrity: withoutIntegrity, instructionFileUrl: instructionFileUrl, MAX_BYTES: MAX_BYTES };
 });

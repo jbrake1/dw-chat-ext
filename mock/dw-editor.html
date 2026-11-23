@@ -12,28 +12,84 @@
  */
 (function () {
   var q = new URLSearchParams(location.search);
-  var HOOK = q.get('hook') === '1', OWN_PANEL = q.get('panel') === '1';
+  var HOOK = q.get('hook') === '1', OWN_PANEL = q.get('panel') === '1', FORCE = q.get('extstatus') === '1';
+  var XT_INSTALL = 'https://dwalliance.com/editor-ai/index.html#install';
+  var XT_AI = { chatgpt: 'ChatGPT' };
+  var XT_VER = /^[0-9A-Za-z._-]{1,32}$/;
+  var XT = { last: null, gotStatus: false, missing: false, timer: null, acked: false };
   window.__dwEvents = [];
+  function hello() { window.postMessage({ source: 'dw-edit', type: 'dw-ext-hello', v: 1, panel: OWN_PANEL, wantEvents: true }, location.origin); }
+  function askStatus() { window.postMessage({ source: 'dw-edit', type: 'dw-ext-status', v: 1 }, location.origin); }
+  function parseStatus(d) {
+    if (!d || d.v !== 1) return null;
+    var extVersion = typeof d.extVersion === 'string' && XT_VER.test(d.extVersion) ? d.extVersion : '';
+    var editor = d.editor === true;
+    var paired = editor && d.paired === true;
+    var ai = (paired && typeof d.ai === 'string' && XT_AI[d.ai]) ? d.ai : null;
+    return { extVersion: extVersion, paired: paired, ai: ai, editor: editor };
+  }
+  function ver(v) { v = String(v || ''); return v ? (v.charAt(0) === 'v' ? v : 'v' + v) : ''; }
+  function line(st) {
+    if (!st) return { state: 'missing', text: 'AI/SI Editor extension not installed', href: XT_INSTALL, link: 'Install the extension', on: false };
+    var v = ver(st.extVersion), inst = v ? 'Installed ' + v : 'Installed';
+    if (!st.editor) return { state: 'unconfirmed', text: inst + ', but this site is not enabled or has not confirmed you as an editor. Sign in as an editor, or click the DW Chat Integration icon and choose Enable on this site.', href: null, on: false };
+    if (st.paired && st.ai === 'chatgpt') return { state: 'paired', text: 'Paired with ChatGPT (' + (v || 'extension') + ')', href: null, on: true };
+    return { state: 'unpaired', text: inst + ', not paired: open chatgpt.com and click Pair this tab', href: null, on: false };
+  }
+  function paintStatus(root) {
+    var nb = root && root.querySelector('.notebox');
+    if (!nb) return;
+    var box = root.querySelector('[data-role=ext-status]');
+    if (!box) {
+      box = el('div', { class: 'ext-status', role: 'status', 'data-role': 'ext-status' });
+      box.appendChild(el('span', { class: 'dot', 'aria-hidden': 'true' }));
+      box.appendChild(el('span', { class: 'txt', 'data-role': 'ext-status-text' }));
+      nb.appendChild(box);
+    }
+    var L = line(XT.last);
+    box.setAttribute('data-state', L.state);
+    box.classList.toggle('on', !!L.on);
+    var txt = box.querySelector('[data-role=ext-status-text]');
+    txt.textContent = L.text;
+    if (L.href) {
+      txt.appendChild(document.createTextNode(' '));
+      txt.appendChild(el('a', { href: L.href, target: '_blank', rel: 'noopener noreferrer' }, L.link));
+    }
+  }
+  window.__dwExtStatus = function () { var L = line(XT.last); return { state: L.state, text: L.text }; };
   if (HOOK) {
     window.addEventListener('message', function (e) {
-      if (e.source !== window || !e.data || e.data.source !== 'dw-ext') return;
+      if (e.source !== window || e.origin !== location.origin || !e.data || e.data.source !== 'dw-ext') return;
       window.__dwEvents.push(e.data);
-      if (e.data.type === 'dw-ext-ready') hello();
+      if (e.data.type === 'dw-ext-ready') { if (!XT.acked) { XT.acked = true; hello(); } }
+      if (e.data.type === 'dw-ext-status') {
+        XT.gotStatus = true; XT.missing = false; XT.last = parseStatus(e.data);
+        if (XT.timer) { clearTimeout(XT.timer); XT.timer = null; }
+        var host = document.getElementById('dw-markup-root');
+        paintStatus(host && host.shadowRoot);
+      }
+      if (e.data.type === 'dw-ext-inactive') {
+        XT.acked = false; XT.gotStatus = true; XT.last = { extVersion: (XT.last && XT.last.extVersion) || '', paired: false, ai: null, editor: false };
+        var host2 = document.getElementById('dw-markup-root');
+        paintStatus(host2 && host2.shadowRoot);
+      }
     });
     hello();
+    askStatus();
+    XT.timer = setTimeout(function () { XT.timer = null; if (!XT.gotStatus) { XT.last = null; XT.missing = true; var h = document.getElementById('dw-markup-root'); paintStatus(h && h.shadowRoot); } }, 1500);
   }
-  function hello() { window.postMessage({ source: 'dw-edit', type: 'dw-ext-hello', v: 1, panel: OWN_PANEL, wantEvents: true }, location.origin); }
 
   fetch('/_dw/whoami', { credentials: 'include', cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
-    if (!j || j.edit !== true) { document.getElementById('status').textContent = 'Not signed in as an editor.'; return; }
-    mount();
-  });
+    if (j && j.edit === true) mount();
+    else if (FORCE && HOOK) mount();
+    else document.getElementById('status').textContent = 'Not signed in as an editor.';
+  }).catch(function () { if (FORCE && HOOK) mount(); });
 
   function el(tag, attrs, text) { var e = document.createElement(tag); for (var k in (attrs || {})) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
   function mount() {
     var host = el('div', { id: 'dw-markup-root', 'data-html2canvas-ignore': 'true' });
     var root = host.attachShadow({ mode: 'open' });
-    root.appendChild(el('style', null, '.notebox{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:12px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.28)}textarea{width:100%;height:92px}.bar{position:fixed;left:50%;top:14px;z-index:2147483647}'));
+    root.appendChild(el('style', null, '.notebox{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:12px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.28)}textarea{width:100%;height:92px}.bar{position:fixed;left:50%;top:14px;z-index:2147483647}.ext-status{display:flex;align-items:flex-start;gap:6px;margin:8px 0 0;font-size:11px;line-height:1.35;color:#4a5a4d}.ext-status .dot{width:8px;height:8px;border-radius:50%;background:#c5cdc4;flex:none;margin-top:3px}.ext-status.on .dot{background:#1f7a3a}.ext-status a{color:#1f4d2b;font-weight:600}'));
     var fab = el('button', { class: 'fab', type: 'button' }, 'Suggest an edit');
     root.appendChild(fab);
     document.documentElement.appendChild(host);
@@ -42,6 +98,7 @@
       var bar = el('div', { class: 'bar' }); var send = el('button', { class: 'send', 'data-act': 'send', type: 'button' }, 'Send'); bar.appendChild(send);
       var nb = el('div', { class: 'notebox' }); var ta = el('textarea', { id: 'dw-mk-note', maxlength: '5000' }); nb.appendChild(ta);
       root.appendChild(bar); root.appendChild(nb);
+      if (HOOK) paintStatus(root);
       send.addEventListener('click', function () {
         // same shape as markup.js: image blob + note + page_url + selectors
         fetch('/__shot.jpg').then(function (r) { return r.blob(); }).then(function (blob) {

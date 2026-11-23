@@ -1,5 +1,5 @@
 /* Mock DW site + mock ChatGPT for local tests. Two listeners (two origins):
- *   DW   http://localhost:<port>   : /, /_dw/whoami, /_dw/ext/pass, /_dw/ext/report, /_dw/ext/sites/chatgpt.json, /markup/
+ *   DW   http://localhost:<port>   : /, /_dw/whoami, /_dw/ext/pass, /_dw/ext/report, /editor-ai/patterns/<site>.json, /markup/
  *   GPT  http://127.0.0.1:<port>   : /  (mock chatgpt.html)
  * Test controls (DW origin): GET /__login /__logout, GET /__state, POST /__set {json}. Never use these in production. */
 const http = require('http');
@@ -41,9 +41,13 @@ function startMock(opts = {}) {
       return json(res, 200, p);
     }
     if (u.pathname === '/_dw/ext/report' && req.method === 'POST') { state.reports.push(JSON.parse((await readBody(req)).toString())); res.writeHead(204); return res.end(); }
-    if (u.pathname === '/_dw/ext/sites/chatgpt.json') {
+    const patt = u.pathname.match(/^\/(?:editor-ai\/patterns|_dw\/ext\/sites)\/([a-z0-9_-]{1,32})\.json$/);
+    if (patt) {
       if (state.instructions == null || state.instructionsStatus !== 200) { res.writeHead(state.instructionsStatus === 200 ? 404 : state.instructionsStatus); return res.end('nope'); }
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }); return res.end(typeof state.instructions === 'string' ? state.instructions : JSON.stringify(state.instructions));
+      const body = typeof state.instructions === 'string' ? state.instructions : JSON.stringify(state.instructions);
+      const etag = '"' + crypto.createHash('sha256').update(body).digest('hex') + '"';
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' }); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'ETag': etag }); return res.end(body);
     }
     if (u.pathname === '/markup/' && req.method === 'POST') {
       const body = await readBody(req);
