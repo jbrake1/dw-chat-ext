@@ -128,7 +128,7 @@
   function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ChatGPT when you press Resume.'); }
   async function submitJob(job) {
     if (S.state.paused) return queue(job);                   // nothing new is sent while paused
-    if (S.panel) S.panel.addUser((job.note || '(no note)').slice(0, 300) + (job.hadShot ? '\n[screenshot attached]' : ''));
+    if (S.panel) S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
     var p = await fetchPass();                               // fresh pass for every send
     if (!p) { if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
     var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: { prompt: job.prompt, file: job.file } });

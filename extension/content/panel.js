@@ -1,26 +1,36 @@
 /* DW Chat Integration: reply panel. Lives in its own shadow root (host #dw-ext-root, excluded from the editor's
  * screenshot). It docks above the editor's note box (#dw-markup-root > .notebox > textarea) when that exists and
- * floats bottom-right otherwise. Everything is rendered with textContent (no HTML from the chat is ever injected). */
+ * floats bottom-right otherwise. Reply text is rendered through DWX.renderMd (no raw HTML from the chat is ever assigned). Tab titles are never shown. */
 (function () {
   'use strict';
   window.DWX = window.DWX || {};
   var CSS = [
     ':host{all:initial}',
-    '*{box-sizing:border-box;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}',
-    '.wrap{position:fixed;z-index:2147483647;width:340px;max-width:calc(100vw - 32px);background:#fff;color:#1d2a20;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.28);font-size:13px;display:flex;flex-direction:column;overflow:hidden}',
-    '.hd{display:flex;align-items:center;gap:6px;padding:7px 9px;background:#1f4d2b;color:#fff}',
-    '.dot{width:9px;height:9px;border-radius:50%;background:#9aa;flex:none}.dot.on{background:#5fe08a}.dot.paused{background:#f5c542}.dot.err{background:#ff6b5b}',
-    '.title{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.hd button{border:0;border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer;background:rgba(255,255,255,.18);color:#fff}',
-    '.hd button:hover:not(:disabled){background:rgba(255,255,255,.32)}.hd button:disabled{opacity:.4;cursor:default}',
-    '.opt{display:flex;align-items:center;gap:6px;padding:5px 9px;border-bottom:1px solid #e6ebe4;color:#4a5a4d;font-size:12px}',
-    '.scroll{overflow:auto;max-height:min(34vh,300px);padding:8px 9px;display:flex;flex-direction:column;gap:7px}',
-    '.me{align-self:flex-end;background:#eef2ec;border-radius:8px;padding:5px 8px;max-width:92%;white-space:pre-wrap;word-break:break-word}',
-    '.reply{background:#f6f8f5;border-radius:8px;padding:6px 8px;white-space:pre-wrap;word-break:break-word}',
-    '.reply.live::after{content:" \\258B";color:#1f4d2b}',
-    '.files{display:flex;flex-direction:column;gap:3px}.files a,.files button{font-size:12px;text-align:left;color:#0b57d0;background:none;border:0;padding:0;cursor:pointer;text-decoration:underline}',
-    '.note{color:#6a786d;font-size:12px}.error{color:#b3261e;font-size:12px}',
-    '.log{color:#6a786d;font-size:11px;line-height:1.4}',
+    '*{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}',
+    '.wrap{position:fixed;z-index:2147483647;width:360px;max-width:calc(100vw - 24px);background:#1b1d21;color:#e8eaed;border:1px solid #2d3138;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:13px;line-height:1.45;display:flex;flex-direction:column;overflow:hidden}',
+    '.hd{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#14161a;border-bottom:1px solid #2d3138;color:#e8eaed}',
+    '.dot{width:8px;height:8px;border-radius:50%;background:#6b7280;flex:none}.dot.on{background:#34d399}.dot.paused{background:#fbbf24}.dot.err{background:#f87171}',
+    '.spin{width:10px;height:10px;border:2px solid #3f4550;border-top-color:#93c5fd;border-radius:50%;flex:none;animation:dwxspin .7s linear infinite}.spin.off{visibility:hidden}',
+    '@keyframes dwxspin{to{transform:rotate(360deg)}}',
+    '.title{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}',
+    '.hd button{border:0;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;background:#2a2f36;color:#e8eaed}',
+    '.hd button:hover:not(:disabled){background:#3a404a}.hd button:disabled{opacity:.4;cursor:default}',
+    '.opt{display:flex;align-items:center;gap:6px;padding:5px 9px;border-bottom:1px solid #2d3138;color:#9aa3ad;font-size:11px}',
+    '.scroll{overflow:auto;max-height:min(42vh,360px);padding:8px 9px;display:flex;flex-direction:column;gap:8px}',
+    '.me{align-self:stretch;background:#252830;border:1px solid #333844;border-radius:8px;padding:7px 8px;display:flex;gap:8px;align-items:flex-start}',
+    '.me .thumb{width:56px;height:56px;object-fit:cover;border-radius:6px;background:#111;flex:none;border:1px solid #3a3f48}',
+    '.me .txt{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;color:#d5d9e0;font-size:12px}',
+    '.reply{background:#22252b;border:1px solid #333844;border-radius:8px;padding:8px 9px;word-break:break-word;color:#e8eaed}',
+    '.reply.live::after{content:" \\258B";color:#93c5fd}',
+    '.reply p{margin:0 0 6px}.reply p:last-child{margin:0}',
+    '.reply h1,.reply h2,.reply h3{margin:0 0 6px;font-size:13px}',
+    '.reply pre{margin:6px 0;padding:8px;background:#111318;border-radius:6px;overflow:auto;font-size:12px}',
+    '.reply code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}',
+    '.reply a{color:#93c5fd}',
+    '.files{display:flex;flex-direction:column;gap:3px}.files a,.files button{font-size:12px;text-align:left;color:#93c5fd;background:none;border:0;padding:0;cursor:pointer;text-decoration:underline}',
+    '.note{color:#9aa3ad;font-size:12px}.error{color:#f87171;font-size:12px}',
+    '.log{color:#9aa3ad;font-size:11px;line-height:1.45}',
+    '.log .step{display:flex;align-items:center;gap:6px}',
     '.hide{display:none}'
   ].join('');
 
@@ -41,11 +51,12 @@
     var hd = el(doc, 'div', { class: 'hd' });
     var dot = el(doc, 'span', { class: 'dot', 'data-role': 'dot' });
     var title = el(doc, 'span', { class: 'title', 'data-role': 'title' }, 'ChatGPT relay');
+    var spin = el(doc, 'span', { class: 'spin off', 'data-role': 'spin', 'aria-hidden': 'true' });
     var bStop = el(doc, 'button', { type: 'button', 'data-act': 'stop', title: 'Stop ChatGPT (clicks its Stop button)' }, 'Stop');
     var bPause = el(doc, 'button', { type: 'button', 'data-act': 'pause', title: 'Hold the relay; nothing new is sent until you resume' }, 'Pause');
     var bUnpair = el(doc, 'button', { type: 'button', 'data-act': 'unpair', title: 'Forget the paired ChatGPT tab' }, 'Unpair');
     var bMin = el(doc, 'button', { type: 'button', 'data-act': 'min', title: 'Collapse' }, '\u2212');
-    [dot, title, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
+    [dot, title, spin, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
     var opt = el(doc, 'label', { class: 'opt' });
     var chk = el(doc, 'input', { type: 'checkbox', 'data-role': 'relay-toggle' });
     chk.checked = true;
@@ -110,7 +121,7 @@
     function render() {
       var s = state;
       dot.className = 'dot' + (s.paused ? ' paused' : (s.active && s.paired ? ' on' : ''));
-      title.textContent = !s.active ? 'ChatGPT relay (waiting for editor pass)' : !s.paired ? 'ChatGPT relay: no tab paired' : ('ChatGPT relay: ' + (s.pairedTitle || 'paired tab'));
+      title.textContent = !s.active ? 'ChatGPT relay (waiting for editor pass)' : !s.paired ? 'ChatGPT relay: no tab paired' : 'Paired with ChatGPT';
       bStop.disabled = !s.busy; bPause.disabled = !s.paired; bUnpair.disabled = !s.paired;
       bPause.textContent = s.paused ? 'Resume' : 'Pause';
       chk.disabled = !s.paired;
@@ -133,19 +144,47 @@
       host: host, root: root,
       setState: function (st) { state = Object.assign(state, st); render(); },
       setRelayChecked: function (on) { chk.checked = !!on; },
-      addUser: function (text) {
+      addUser: function (text, shot) {
         replyEl = null; filesEl = null; logEl = null;
-        scroll.appendChild(el(doc, 'div', { class: 'me', 'data-role': 'me' }, text)); stickBottom = true; autoscroll();
+        var row = el(doc, 'div', { class: 'me', 'data-role': 'me' });
+        if (typeof shot === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(shot)) {
+          var img = el(doc, 'img', { class: 'thumb', 'data-role': 'thumb', alt: 'Screenshot sent' });
+          img.src = shot;
+          row.appendChild(img);
+        }
+        row.appendChild(el(doc, 'div', { class: 'txt', 'data-role': 'me-text' }, text));
+        scroll.appendChild(row); stickBottom = true; autoscroll();
       },
       note: function (text) { scroll.appendChild(el(doc, 'div', { class: 'note', 'data-role': 'note' }, text)); autoscroll(); },
       step: function (name, ok, detail) {
         ensureReply();
-        logEl.appendChild(el(doc, 'div', { 'data-step': name, 'data-ok': ok ? '1' : '0' }, (ok ? '\u2713 ' : '\u2717 ') + name + (detail ? ' ' + detail : '')));
+        var labels = { instructions: 'Getting ready', prompt: 'Opening ChatGPT', text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: 'ChatGPT is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
+        var label = labels[name] || name;
+        if ((name === 'send' || name === 'attach') && ok) {
+          var haveShot = logEl.querySelector('[data-step=send],[data-step=attach]');
+          logEl.appendChild(el(doc, 'div', { class: haveShot ? 'step hide' : 'step', 'data-step': name, 'data-ok': '1' }, '\u2713 Screenshot sent' + (detail ? ' ' + detail : '')));
+          if (!logEl.querySelector('[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, 'ChatGPT is reading\u2026'));
+          spin.classList.remove('off');
+          autoscroll();
+          return;
+        }
+        if (name === 'stream') {
+          spin.classList.remove('off');
+          if (!logEl.querySelector('[data-step=stream],[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, 'ChatGPT is reading\u2026'));
+          else if (!logEl.querySelector('[data-step=stream]')) logEl.appendChild(el(doc, 'div', { class: 'step hide', 'data-step': 'stream', 'data-ok': '1', 'aria-hidden': 'true' }, ''));
+          autoscroll();
+          return;
+        }
+        logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': name, 'data-ok': ok ? '1' : '0' }, (ok ? '\u2713 ' : '\u2717 ') + label + (detail && name !== 'attach' && name !== 'send' ? ' ' + detail : '')));
         autoscroll();
       },
       setReply: function (text, files) {
         ensureReply();
-        replyEl.textContent = text;
+        var reading = logEl && logEl.querySelector('[data-role=reading]');
+        if (reading) { reading.setAttribute('data-ok', '1'); reading.textContent = '\u2713 ChatGPT is reading\u2026'; }
+        spin.classList.remove('off');
+        if (window.DWX && typeof DWX.renderMd === 'function') DWX.renderMd(doc, text, replyEl);
+        else replyEl.textContent = text;
         filesEl.textContent = '';
         (files || []).forEach(function (f) {
           if (!f.needsTab && /^https:/i.test(f.url)) {
@@ -161,8 +200,8 @@
         });
         autoscroll();
       },
-      done: function (status) { ensureReply(); replyEl.classList.remove('live'); replyEl.setAttribute('data-done', status); if (status === 'stopped') this.note('Stopped.'); },
-      error: function (msg) { scroll.appendChild(el(doc, 'div', { class: 'error', 'data-role': 'error' }, msg)); if (replyEl) replyEl.classList.remove('live'); autoscroll(); },
+      done: function (status) { ensureReply(); replyEl.classList.remove('live'); replyEl.setAttribute('data-done', status); spin.classList.add('off'); if (status === 'stopped') this.note('Stopped.'); },
+      error: function (msg) { scroll.appendChild(el(doc, 'div', { class: 'error', 'data-role': 'error' }, msg)); if (replyEl) replyEl.classList.remove('live'); spin.classList.add('off'); dot.classList.add('err'); autoscroll(); },
       place: place,
       destroy: function () { if (mo) mo.disconnect(); if (markupMo) markupMo.disconnect(); if (ro) ro.disconnect(); window.removeEventListener('resize', place); host.remove(); }
     };

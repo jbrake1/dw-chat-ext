@@ -1,9 +1,11 @@
 {
-  "_comment": "Single source of truth for host permissions. Edit, then run: npm run sync-hosts (rewrites extension/manifest.json matches and extension/config.json dwHosts). patterns hosts are fetch-only (no content script). No <all_urls>.",
+  "_comment": "Single source of truth for host permissions. Edit, then run: npm run sync-hosts (rewrites extension/manifest.json matches and extension/config.json dwHosts). Hostnames only in 'patterns' are fetch-only (no content script). A host may appear in both dw and patterns (editor site that also hosts the static pattern file). No <all_urls>.",
   "dw": [
     "app.dwalliance.com",
     "mingapothecary.com",
-    "www.mingapothecary.com"
+    "www.mingapothecary.com",
+    "dwalliance.com",
+    "www.dwalliance.com"
   ],
   "ai": [
     "chatgpt.com"

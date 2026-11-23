@@ -8,7 +8,7 @@ const m = JSON.parse(fs.readFileSync(mp, 'utf8')), c = JSON.parse(fs.readFileSyn
 const pat = (h) => 'https://' + h + '/*';
 const all = [...hosts.dw, ...hosts.ai, ...(hosts.patterns || [])];
 for (const h of all) if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(h)) throw new Error('bad host ' + h);
-m.host_permissions = [...hosts.ai, ...hosts.dw, ...(hosts.patterns || [])].map(pat);
+m.host_permissions = [...new Set([...hosts.ai, ...hosts.dw, ...(hosts.patterns || [])])].map(pat);
 m.content_scripts[0].matches = hosts.dw.map(pat);
 m.content_scripts[1].matches = hosts.ai.map(pat);
 c.dwHosts = hosts.dw;

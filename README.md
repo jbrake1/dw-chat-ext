@@ -51,7 +51,7 @@ See [API.md](API.md) for the three site endpoints and the optional page-message 
 
 A standalone copy of these steps is in [INSTALL.md](INSTALL.md). Chrome is the supported browser (version 120 or later). The extension is not in the Chrome Web Store yet, so you load the zip yourself.
 
-**Download:** [dw-chat-ext-v0.1.1.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.1.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.1 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.1). Optional check: the zip’s md5 is `fb668aad7cf18bf880c62d956a7928a7`. Version 0.1.0 remains available on the install page.
+**Download:** [dw-chat-ext-v0.1.2.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.2.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.2 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.2). Optional check: the zip’s md5 is `95f3c1e4c2adcef491e6b32e03444ac3`. Versions 0.1.1 and 0.1.0 remain available on the install page.
 
 ### Load it in Chrome
 

@@ -57,7 +57,7 @@ async function lastAssistantText(env) {
 // One full request through the DW editor. Returns after done/error is visible in the panel.
 async function sendAndWait(env, c, o = {}) {
   const dw = env.dwPage;
-  await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  await dw.waitForSelector('#dw-ext-root, #dw-ext-feed', { state: 'attached', timeout: 15000 });
   await L.installRecorder(dw);
   await L.submitEdit(dw, o.note || NOTE);
   const reply = dw.locator('[data-role=reply]');
@@ -200,12 +200,46 @@ scenarios['native-hook'] = async (env) => {
   c.check('done_event_has_text_and_files', done && done.status === 'complete' && /^OK\./.test(done.text) && done.files.length === 3);
   const rec = await env.gptPage.evaluate(() => window.__received);
   c.check('relayed_once_not_twice', rec.length === 1, rec.length);
-  // page renders its own panel -> extension injects none
-  const dw2 = await env.ctx.newPage(); await dw2.goto(env.dwUrl + '/?hook=1&panel=1'); await L.sleep(2500);
+  // page renders its own panel -> extension injects none; mock streaming shows steps and incremental text
+  await env.openGpt('?speed=50&tokens=40');
+  await L.pair(env.sw, env.gptPattern);
+  const dw2 = await env.ctx.newPage(); await dw2.goto(env.dwUrl + '/?hook=1&panel=1'); env.dwPage = dw2; await L.sleep(1500);
   c.check('own_panel_flag_suppresses_fallback_panel', (await dw2.locator('#dw-ext-root').count()) === 0);
+  await L.submitEdit(dw2, NOTE);
+  await dw2.waitForSelector('#dw-ext-feed', { state: 'attached', timeout: 15000 });
+  await L.installRecorder(dw2);
+  await L.waitFor(async () => (await dw2.evaluate(() => (window.__snaps || []).length)) >= 2, 20000, 'native feed incremental text');
+  const snaps = await dw2.evaluate(() => window.__snaps);
+  c.check('native_feed_streams_incremental_text', Array.isArray(snaps) && snaps.length >= 2 && snaps[0].length < snaps[snaps.length - 1].length, { n: snaps && snaps.length, first: snaps && snaps[0] && snaps[0].length, last: snaps && snaps[snaps.length - 1] && snaps[snaps.length - 1].length });
+  const steps = await L.panelSteps(dw2);
+  const stepText = steps.map((s) => s.text).join(' | ');
+  c.check('native_feed_shows_sent_and_reading_steps', /Screenshot sent/.test(stepText) && /ChatGPT is reading/.test(stepText), stepText);
+  const hasThumb = await dw2.evaluate(() => {
+    const r = document.getElementById('dw-ext-feed') && document.getElementById('dw-ext-feed').shadowRoot;
+    const img = r && r.querySelector('[data-role=feed-thumb]');
+    return !!(img && img.getAttribute('src'));
+  });
+  c.check('native_feed_shows_screenshot_thumb', hasThumb);
+  const shotDir = require('path').join(__dirname, '../shots');
+  require('fs').mkdirSync(shotDir, { recursive: true });
+  await L.panelShot(dw2, require('path').join(shotDir, 'mock-feed-mid.png'));
+  c.info('screenshot_mock_feed_mid', true, require('path').join(shotDir, 'mock-feed-mid.png'));
+  await L.waitFor(async () => {
+    const d = await dw2.evaluate(() => {
+      const r = document.getElementById('dw-ext-feed') && document.getElementById('dw-ext-feed').shadowRoot;
+      const n = r && (r.querySelector('[data-role=reply]') || r.querySelector('[data-role=dw-ext-feed]'));
+      return n && n.getAttribute('data-done');
+    });
+    return d === 'complete' || d === 'stopped';
+  }, 20000, 'native feed done');
+  await L.panelShot(dw2, require('path').join(shotDir, 'mock-feed-done.png'));
+  c.info('screenshot_mock_feed_done', true, require('path').join(shotDir, 'mock-feed-done.png'));
+  const reply = await L.panelText(dw2, 'reply');
+  c.check('native_feed_shows_reply', !!(reply && reply.length > 8), reply && reply.slice(0, 80));
   await dw2.evaluate(() => window.postMessage({ source: 'dw-edit', type: 'dw-ext-control', action: 'pause' }, location.origin));
   await L.sleep(500);
   c.check('page_can_send_control_events', (await L.swState(env.sw)).paused === true);
+  await dw2.evaluate(() => window.postMessage({ source: 'dw-edit', type: 'dw-ext-control', action: 'resume' }, location.origin));
   return c.steps;
 };
 
@@ -405,7 +439,7 @@ scenarios['ext-status'] = async (env) => {
   await pB.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
   await L.waitFor(async () => { const s = await read(pB); return s && s.state === 'unconfirmed'; }, 8000, 'unconfirmed status');
   const b = await read(pB);
-  c.check('status_installed_unconfirmed_editor', !!(b && b.state === 'unconfirmed' && /Installed v0\.1\.1/.test(b.text) && /Enable on this site/.test(b.text) && /Sign in as an editor/.test(b.text)), b);
+  c.check('status_installed_unconfirmed_editor', !!(b && b.state === 'unconfirmed' && /Installed v0\.1\.2/.test(b.text) && /Enable on this site/.test(b.text) && /Sign in as an editor/.test(b.text)), b);
   await pB.close();
 
   process.stderr.write('ext-status: unconfirmed check done\n');
@@ -416,7 +450,7 @@ scenarios['ext-status'] = async (env) => {
   await dw.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired status');
   const mid = await read(dw);
-  c.check('status_installed_not_paired', !!(mid && mid.state === 'unpaired' && mid.text === 'Installed v0.1.1, not paired: open chatgpt.com and click Pair this tab'), mid);
+  c.check('status_installed_not_paired', !!(mid && mid.state === 'unpaired' && mid.text === 'Installed v0.1.2, not paired: open chatgpt.com and click Pair this tab'), mid);
 
   process.stderr.write('ext-status: unpaired check done\n');
   // (d) pairing updates the line live; unpairing too
@@ -426,13 +460,13 @@ scenarios['ext-status'] = async (env) => {
   c.check('paired_for_status', pr && pr.ok, pr);
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'paired'; }, 8000, 'paired status');
   const d = await read(dw);
-  c.check('status_paired_with_chatgpt', !!(d && d.state === 'paired' && d.on && d.text === 'Paired with ChatGPT (v0.1.1)'), d);
+  c.check('status_paired_with_chatgpt', !!(d && d.state === 'paired' && d.on && d.text === 'Paired with ChatGPT (v0.1.2)'), d);
 
   process.stderr.write('ext-status: unpairing via panel\n');
   await dw.locator('#dw-ext-root [data-act=unpair]').click();
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired after unpair');
   const u = await read(dw);
-  c.check('status_updates_live_on_unpair', !!(u && u.state === 'unpaired' && u.text === 'Installed v0.1.1, not paired: open chatgpt.com and click Pair this tab'), u);
+  c.check('status_updates_live_on_unpair', !!(u && u.state === 'unpaired' && u.text === 'Installed v0.1.2, not paired: open chatgpt.com and click Pair this tab'), u);
 
   const leaked = await dw.evaluate(() => (window.__dwEvents || []).some((m) => m && (m.pairedTitle || m.title || (typeof m.text === 'string' && m.type === 'dw-ext-status'))));
   c.check('status_messages_have_no_tab_title_or_chat_text', leaked === false, leaked);

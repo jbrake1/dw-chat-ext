@@ -45,6 +45,7 @@ const swState = (sw) => sw.evaluate(() => self.__dw.state());
 const iconLog = (sw) => sw.evaluate(() => self.__dw.iconLog);
 const tabIdFor = (sw, urlPattern) => sw.evaluate(async (p) => { const t = (await chrome.tabs.query({ url: p }))[0]; return t ? t.id : null; }, urlPattern);
 const pair = async (sw, urlPattern) => sw.evaluate(async (p) => { const t = (await chrome.tabs.query({ url: p }))[0]; return self.__dw.pairTab(t.id); }, urlPattern);
+const unpair = (sw) => sw.evaluate(() => self.__dw.unpair());
 const refreshInstr = (sw) => sw.evaluate(() => self.__dw.refreshInstructions('test'));
 
 async function mockApi(dwUrl, p, body) {
@@ -62,27 +63,73 @@ function seal(instr, privateKey) {
 // Drive the DW editor like a person: Suggest an edit -> type a note -> Send (real, trusted mouse events).
 async function submitEdit(dwPage, note) {
   // a person needs > 1 s to draw and type; the extension falls back to its fetch tap ~0.5 s after activation
-  await dwPage.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  await dwPage.waitForSelector('#dw-ext-root, #dw-markup-root, #dw-ext-feed', { state: 'attached', timeout: 15000 });
   await sleep(800);
   await dwPage.locator('button.fab').click();
   await dwPage.locator('textarea#dw-mk-note').fill(note);
   await dwPage.locator('button[data-act=send]').click();
 }
-const panelText = (page, role) => page.locator(`[data-role=${role}]`).last().textContent({ timeout: 2000 }).catch(() => null);
+const panelRootSel = '#dw-ext-feed, #dw-ext-root';
+const panelText = (page, role) => page.evaluate((r) => {
+  const root = (function () {
+    const feed = document.getElementById('dw-ext-feed');
+    if (feed && feed.shadowRoot) return feed.shadowRoot;
+    const host = document.getElementById('dw-ext-root');
+    return host && host.shadowRoot;
+  })();
+  const n = root && root.querySelector(`[data-role=${r}]`);
+  return n ? (n.innerText || n.textContent) : null;
+}, role).catch(() => null);
 async function installRecorder(page) {
+  await page.waitForSelector('#dw-ext-feed, #dw-ext-root', { state: 'attached', timeout: 20000 });
   await page.evaluate(() => {
     window.__snaps = [];
-    const root = document.getElementById('dw-ext-root').shadowRoot;
-    new MutationObserver(() => {
+    const feed = document.getElementById('dw-ext-feed');
+    const host = document.getElementById('dw-ext-root');
+    const root = (feed && feed.shadowRoot) || (host && host.shadowRoot);
+    if (!root) return;
+    const snap = () => {
       const r = root.querySelector('[data-role=reply]');
       if (r) { const t = r.textContent; if (t && window.__snaps[window.__snaps.length - 1] !== t) window.__snaps.push(t); }
-    }).observe(root, { subtree: true, childList: true, characterData: true });
+    };
+    snap();
+    new MutationObserver(snap).observe(root, { subtree: true, childList: true, characterData: true });
   });
 }
 const panelSteps = (page) => page.evaluate(() => {
-  const root = document.getElementById('dw-ext-root') && document.getElementById('dw-ext-root').shadowRoot;
+  const feed = document.getElementById('dw-ext-feed');
+  const host = document.getElementById('dw-ext-root');
+  const root = (feed && feed.shadowRoot) || (host && host.shadowRoot);
   return root ? Array.from(root.querySelectorAll('[data-step]')).map((e) => ({ step: e.dataset.step, ok: e.dataset.ok === '1', text: e.textContent })) : [];
 });
+const panelShot = async (page, file) => {
+  await page.waitForSelector('#dw-ext-feed, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const box = await page.evaluate(() => {
+    function rect(n) {
+      if (!n) return null;
+      const r = n.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    }
+    const feed = document.getElementById('dw-ext-feed');
+    const inner = feed && feed.shadowRoot && (feed.shadowRoot.querySelector('.feed') || feed.shadowRoot.querySelector('[data-role=dw-ext-feed]'));
+    const a = rect(inner);
+    if (a) return a;
+    const root = document.getElementById('dw-ext-root');
+    return rect(root && root.shadowRoot && (root.shadowRoot.querySelector('.wrap') || root.shadowRoot.querySelector('[data-role=panel]')));
+  });
+  const vp = page.viewportSize() || { width: 1100, height: 800 };
+  if (box) {
+    const x = Math.max(0, Math.floor(box.x));
+    const y = Math.max(0, Math.floor(box.y));
+    const width = Math.max(1, Math.min(vp.width - x, Math.ceil(box.width)));
+    const height = Math.max(1, Math.min(vp.height - y, Math.ceil(box.height)));
+    await page.screenshot({ path: file, clip: { x, y, width, height } });
+  } else {
+    await page.screenshot({ path: file });
+  }
+  return file;
+};
 const waitFor = async (fn, ms = 20000, label = 'condition') => {
   const t0 = Date.now();
   for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t0 > ms) throw new Error('timeout waiting for ' + label); await sleep(60); }
@@ -95,4 +142,4 @@ class Checks {
   get ok() { return this.steps.every((s) => s.ok || s.informational); }
 }
 
-module.exports = { root, sleep, launch, setDev, swState, iconLog, tabIdFor, pair, refreshInstr, mockApi, seal, submitEdit, panelText, installRecorder, panelSteps, waitFor, Checks };
+module.exports = { root, sleep, launch, setDev, swState, iconLog, tabIdFor, pair, unpair, refreshInstr, mockApi, seal, submitEdit, panelText, installRecorder, panelSteps, panelShot, panelRootSel, waitFor, Checks };

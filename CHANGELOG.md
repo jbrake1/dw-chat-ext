@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.2 — 2026-11-23
+
+- Suggest an edit now draws a persistent in-editor transcript (`#dw-ext-feed`) after Send: the user's note plus a page-local screenshot thumbnail, status steps ("Screenshot sent" → "ChatGPT is reading…"), streaming assistant text with safe markdown, Pause / Stop, and auto-scroll. The editor hello is `{ panel: true, wantEvents: true }`, so the extension does not inject its own panel on DW editor pages.
+- The fallback panel (used when a page has no native feed) uses the same compact dark transcript style, shows a screenshot thumbnail already in memory, and never displays a ChatGPT tab title.
+- Production now issues a short-lived signed editor pass at `POST /_dw/ext/pass` for a signed-in editor on that site (same-origin and `X-DW-Ext` required). The official zip embeds the production pass public key so an unsigned or wrongly signed pass is refused. `allowDevOverride` stays false. Site-instruction updates still come from `https://dwalliance.com/editor-ai/patterns/{site}.json`.
+- `/_dw/ext/report` and `/_dw/ext/files` stay disabled on production. The feed has no draft/publish/versions buttons; report calls fail silently.
+- The content script now matches `dwalliance.com` and `www.dwalliance.com` (as well as `app.dwalliance.com` and the Ming Apothecary hosts), so the status line and feed work on the public marketing site without "Enable on this site."
+- The compact extension status line from v0.1.1 is unchanged.
+
+The packaged zip is `dw-chat-ext-v0.1.2.zip` (66,671 bytes), md5 `95f3c1e4c2adcef491e6b32e03444ac3`. Official download: [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html). Versions 0.1.1 and 0.1.0 remain available on that page.
+
+
 ## v0.1.1 — 2026-11-23
 
 - Suggest an edit shows a compact extension status line: not installed (with a link to the install page), installed but the site is not enabled or the editor is unconfirmed, installed but not paired, or paired with ChatGPT. The line updates live when you pair or unpair.

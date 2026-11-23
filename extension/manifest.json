@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DW Chat Integration",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minimum_chrome_version": "120",
   "description": "Sends a DW Alliance 'Suggest an edit' request (screenshot and note) to the ChatGPT tab you paired, and shows the streamed reply next to the editor. Active only for signed-in site editors.",
   "permissions": [
@@ -15,7 +15,8 @@
     "https://app.dwalliance.com/*",
     "https://mingapothecary.com/*",
     "https://www.mingapothecary.com/*",
-    "https://dwalliance.com/*"
+    "https://dwalliance.com/*",
+    "https://www.dwalliance.com/*"
   ],
   "optional_host_permissions": [
     "https://*/*"
@@ -44,11 +45,14 @@
       "matches": [
         "https://app.dwalliance.com/*",
         "https://mingapothecary.com/*",
-        "https://www.mingapothecary.com/*"
+        "https://www.mingapothecary.com/*",
+        "https://dwalliance.com/*",
+        "https://www.dwalliance.com/*"
       ],
       "js": [
         "lib/util.js",
         "lib/status.js",
+        "lib/md.js",
         "content/panel.js",
         "content/dw.js"
       ],

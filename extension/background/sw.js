@@ -402,4 +402,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 });
 
 // test visibility only (config.allowDevOverride is false in the shipped build)
-self.__dw = { iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, getInstructions, getConfig };
+self.__dw = { iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig };

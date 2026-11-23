@@ -9,9 +9,15 @@
   "dwHosts": [
     "app.dwalliance.com",
     "mingapothecary.com",
-    "www.mingapothecary.com"
+    "www.mingapothecary.com",
+    "dwalliance.com",
+    "www.dwalliance.com"
   ],
-  "passPublicKeyJwk": null,
+  "passPublicKeyJwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "D9hiN8Ik83AhP0iBce_UNA_nCwGG3yW6qFn_AseZnLU"
+  },
   "instructionsPublicKeyJwk": null,
   "promptTemplate": "I am editing the website {host}. This is the page: {pageUrl}\nThe attached image is a screenshot of that page. The change I want is marked on it in red.\nRequested change: {note}\nPlease tell me exactly what to change (the text, HTML or CSS), and give any updated file as a download.",
   "allowDevOverride": false,

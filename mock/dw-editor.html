@@ -73,6 +73,12 @@
         var host2 = document.getElementById('dw-markup-root');
         paintStatus(host2 && host2.shadowRoot);
       }
+      if (OWN_PANEL) {
+        if (e.data.type === 'dw-ext-step') feedStep(e.data.step, e.data.ok !== false);
+        if (e.data.type === 'dw-ext-chunk') feedChunk(e.data.text);
+        if (e.data.type === 'dw-ext-done') feedDone(e.data);
+        if (e.data.type === 'dw-ext-error') feedError(e.data.code);
+      }
     });
     hello();
     askStatus();
@@ -111,17 +117,118 @@
             .then(function (r) { return r.json(); })
             .then(function (j) {
               if (j && j.ok) {
-                if (HOOK) { var fr = new FileReader(); fr.onload = function () { window.postMessage({ source: 'dw-edit', type: 'dw-ext-submit', v: 1, id: String(j.id), screenshot: String(fr.result), note: ta.value, pageUrl: location.href, element: { selectors: ['h2'], capture: 'full page', viewport: '1280x720@1' } }, location.origin); finishUi(); }; fr.readAsDataURL(blob); }
+                if (HOOK) { var fr = new FileReader(); fr.onload = function () { if (OWN_PANEL) feedUser(ta.value, String(fr.result)); window.postMessage({ source: 'dw-edit', type: 'dw-ext-submit', v: 1, id: String(j.id), screenshot: String(fr.result), note: ta.value, pageUrl: location.href, element: { selectors: ['h2'], capture: 'full page', viewport: '1280x720@1' } }, location.origin); finishUi(); }; fr.readAsDataURL(blob); }
                 else finishUi();
               }
             });
         });
-        function finishUi() { bar.remove(); nb.remove(); fab.style.display = ''; document.getElementById('status').textContent = 'Thanks! Your edit request was sent.'; }
+        function finishUi() { bar.remove(); nb.remove(); fab.style.display = ''; document.getElementById('status').textContent = OWN_PANEL ? 'Edit request sent. The ChatGPT reply will appear in the panel.' : 'Thanks! Your edit request was sent.'; }
       });
     }
     fab.addEventListener('click', start);
     if (location.hash === '#suggest-edit') start();
     window.addEventListener('hashchange', function () { if (location.hash === '#suggest-edit') start(); });
   }
+
+  var FEED_LABEL = { instructions: 'Getting ready', prompt: 'Opening ChatGPT', text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: 'ChatGPT is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
+  var FEED = {};
+  function feedEl(tag, attrs, text) { var e = document.createElement(tag); for (var k in (attrs || {})) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+  function feedMount() {
+    if (FEED.host) return FEED.wrap;
+    FEED.host = feedEl('div', { id: 'dw-ext-feed', 'data-html2canvas-ignore': 'true' });
+    FEED.root = FEED.host.attachShadow({ mode: 'open' });
+    FEED.root.appendChild(feedEl('style', null, ':host{all:initial}*{box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif}.feed{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(380px,calc(100vw - 24px));max-height:min(52vh,440px);background:#1b1d21;color:#e8eaed;border:1px solid #2d3138;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:13px;line-height:1.45;display:flex;flex-direction:column;overflow:hidden}.hd{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#14161a;border-bottom:1px solid #2d3138}.title{font-weight:600;flex:1;min-width:0;font-size:12px}.spin{width:10px;height:10px;border:2px solid #3f4550;border-top-color:#93c5fd;border-radius:50%;animation:s .7s linear infinite}.spin.off{visibility:hidden}@keyframes s{to{transform:rotate(360deg)}}.hd button{border:0;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;background:#2a2f36;color:#e8eaed}.scroll{flex:1;overflow:auto;padding:8px 10px}.me{display:flex;gap:8px;align-items:flex-start;margin-bottom:8px}.thumb{width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid #2d3138;background:#111}.txt{flex:1;background:#2a2f36;border-radius:8px;padding:6px 8px;white-space:pre-wrap}.steps{font-size:12px;color:#9aa0a6;display:flex;flex-direction:column;gap:3px;margin:0 0 8px}.step[data-ok="1"]{color:#86efac}.reply{white-space:pre-wrap}.err{color:#f87171}'));
+    FEED.wrap = feedEl('div', { class: 'feed', role: 'region', 'aria-label': 'ChatGPT reply', 'data-role': 'dw-ext-feed' });
+    var hd = feedEl('div', { class: 'hd' });
+    FEED.title = feedEl('span', { class: 'title', 'data-role': 'feed-status' }, 'ChatGPT');
+    FEED.spin = feedEl('span', { class: 'spin off', 'data-role': 'feed-spin' });
+    FEED.pause = feedEl('button', { type: 'button', 'data-act': 'pause' }, 'Pause');
+    FEED.stop = feedEl('button', { type: 'button', 'data-act': 'stop' }, 'Stop');
+    FEED.paused = false;
+    FEED.pause.addEventListener('click', function () {
+      var p = !FEED.paused;
+      window.postMessage({ source: 'dw-edit', type: 'dw-ext-control', v: 1, action: p ? 'pause' : 'resume' }, location.origin);
+      FEED.paused = p; FEED.pause.textContent = p ? 'Resume' : 'Pause';
+    });
+    FEED.stop.addEventListener('click', function () { window.postMessage({ source: 'dw-edit', type: 'dw-ext-control', v: 1, action: 'stop' }, location.origin); });
+    hd.appendChild(FEED.title); hd.appendChild(FEED.spin); hd.appendChild(FEED.pause); hd.appendChild(FEED.stop);
+    FEED.scroll = feedEl('div', { class: 'scroll', 'data-role': 'feed-scroll', role: 'log' });
+    FEED.wrap.appendChild(hd); FEED.wrap.appendChild(FEED.scroll);
+    FEED.root.appendChild(FEED.wrap);
+    document.documentElement.appendChild(FEED.host);
+    return FEED.wrap;
+  }
+  function feedUser(note, shot) {
+    feedMount();
+    FEED.wrap.setAttribute('data-state', 'sending');
+    FEED.title.textContent = 'Sending to ChatGPT\u2026';
+    FEED.spin.classList.remove('off');
+    FEED.scroll.textContent = '';
+    FEED.reply = null;
+    var row = feedEl('div', { class: 'me', 'data-role': 'feed-user' });
+    if (shot) row.appendChild(feedEl('img', { class: 'thumb', 'data-role': 'feed-thumb', alt: 'Screenshot sent', src: shot }));
+    row.appendChild(feedEl('div', { class: 'txt', 'data-role': 'feed-note' }, note || '(no note)'));
+    FEED.scroll.appendChild(row);
+    FEED.steps = feedEl('div', { class: 'steps', 'data-role': 'feed-steps' });
+    FEED.scroll.appendChild(FEED.steps);
+  }
+  function feedAddStep(name, ok, label) {
+    feedMount();
+    if (!FEED.steps) { FEED.steps = feedEl('div', { class: 'steps', 'data-role': 'feed-steps' }); FEED.scroll.appendChild(FEED.steps); }
+    var row = feedEl('div', { class: 'step', 'data-step': name, 'data-ok': ok ? '1' : '0' }, (ok ? '\u2713 ' : '') + label);
+    FEED.steps.appendChild(row);
+    return row;
+  }
+  function feedStep(name, ok) {
+    if ((name === 'send' || name === 'attach') && ok) {
+      var haveShot = FEED.steps && FEED.steps.querySelector('[data-step=send],[data-step=attach]');
+      var row = feedAddStep(name, true, 'Screenshot sent');
+      if (haveShot && row) row.style.display = 'none';
+      if (FEED.steps && !FEED.steps.querySelector('[data-role=reading]')) {
+        var r = feedAddStep('stream', false, 'ChatGPT is reading\u2026');
+        r.setAttribute('data-role', 'reading');
+      }
+      if (FEED.wrap) { FEED.wrap.setAttribute('data-state', 'streaming'); FEED.title.textContent = 'ChatGPT is reading\u2026'; FEED.spin.classList.remove('off'); }
+      return;
+    }
+    if (name === 'stream') {
+      if (FEED.wrap) { FEED.wrap.setAttribute('data-state', 'streaming'); FEED.spin.classList.remove('off'); }
+      if (FEED.steps && !FEED.steps.querySelector('[data-role=reading],[data-step=stream]')) {
+        var r2 = feedAddStep('stream', false, 'ChatGPT is reading\u2026');
+        r2.setAttribute('data-role', 'reading');
+      }
+      return;
+    }
+    feedAddStep(name, ok, FEED_LABEL[name] || name);
+  }
+  function feedChunk(text) {
+    feedMount();
+    FEED.wrap.setAttribute('data-state', 'streaming');
+    FEED.title.textContent = 'ChatGPT is answering\u2026';
+    FEED.spin.classList.remove('off');
+    var reading = FEED.steps && FEED.steps.querySelector('[data-role=reading]');
+    if (reading) { reading.setAttribute('data-ok', '1'); reading.textContent = '\u2713 ChatGPT is reading\u2026'; }
+    if (!FEED.reply) {
+      FEED.reply = feedEl('div', { class: 'reply', 'data-role': 'reply' });
+      FEED.scroll.appendChild(FEED.reply);
+    }
+    FEED.reply.textContent = String(text || '');
+    FEED.scroll.scrollTop = FEED.scroll.scrollHeight;
+  }
+  function feedDone(d) {
+    if (d && d.text) feedChunk(d.text);
+    if (FEED.spin) FEED.spin.classList.add('off');
+    var st = (d && d.status) || 'complete';
+    if (FEED.wrap) { FEED.wrap.setAttribute('data-state', st === 'stopped' ? 'stopped' : 'done'); FEED.wrap.setAttribute('data-done', st); FEED.title.textContent = st === 'stopped' ? 'Stopped' : 'ChatGPT reply'; }
+    if (FEED.reply) FEED.reply.setAttribute('data-done', st);
+    if (st === 'stopped' && FEED.scroll) FEED.scroll.appendChild(feedEl('div', { class: 'err', 'data-role': 'feed-stopped' }, 'Stopped. Nothing on the site changed.'));
+  }
+  function feedError(code) {
+    feedMount();
+    if (FEED.spin) FEED.spin.classList.add('off');
+    if (FEED.wrap) { FEED.wrap.setAttribute('data-state', 'error'); FEED.title.textContent = 'Relay stopped'; }
+    if (FEED.scroll) FEED.scroll.appendChild(feedEl('div', { class: 'err', 'data-role': 'error' }, 'The AI relay stopped (' + String(code || 'error') + '). Nothing else changed.'));
+  }
+
 })();
 </script></body></html>
