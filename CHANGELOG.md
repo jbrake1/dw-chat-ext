@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.3 — staging only (not released)
+## v0.1.3 — 2026-11-23
 
 - Suggest an edit now sends the page's source files with the screenshot by default. The editor (`/markup/markup.js`) downloads the page's own HTML as stored in /files (it removes the editor loader, affiliate tag and free-site credit that the server adds when it serves the page), its same-origin stylesheets and scripts, and up to 4 same-origin images (named in the note, under the drawing, or visible when Send was pressed). The editor's own scripts (`/markup/`, `/_dw/`, the affiliate tag) and third-party files are never sent; third-party files are listed as "not attached".
 - Caps: 10 files, 2 MB per file, 6 MB in total, 10 seconds to collect. Anything skipped is listed in the prompt with the reason.
@@ -9,6 +9,8 @@
 - "Include page files (HTML, CSS, JS, images)" checkbox in the editor note box, ticked by default; the choice is remembered in the browser. Unticked sends the screenshot only, as in v0.1.2.
 - Feed steps: "Collecting page files (n)" and "Uploaded screenshot + n files". `dw-ext-step` for `attach` carries `files` (the page-file count).
 - Fix: the extension status line in the note box no longer picks up the text tool's red dashed style.
+
+The packaged zip is `dw-chat-ext-v0.1.3.zip` (70,521 bytes), md5 `1925327f9abcf5c6102fedde1bb2d487`. Official download: [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html). Versions 0.1.2, 0.1.1 and 0.1.0 remain available on that page.
 
 ## v0.1.2 — 2026-11-23
 
