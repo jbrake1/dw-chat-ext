@@ -8,11 +8,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // direct=true (used for LIVE runs): start the browser binary ourselves (no --enable-automation, no navigator.webdriver) and attach
 // over CDP. chatgpt.com sits behind a Cloudflare challenge that blocks Playwright-launched browsers but not this.
-async function launchDirect({ profileDir, extDir, headless }) {
+async function launchDirect({ profileDir, extDir, headless, args: extra = [] }) {
   const cp = require('child_process'), net = require('net'), http = require('http');
   const port = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
   const args = [`--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check',
-    '--disable-dev-shm-usage', `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, '--window-size=1100,900', 'about:blank'];
+    '--disable-dev-shm-usage', `--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, '--window-size=1100,900', ...extra, 'about:blank'];
   if (process.getuid && process.getuid() === 0) args.push('--no-sandbox');
   if (headless) args.push('--headless=new');
   const proc = cp.spawn(chromium.executablePath(), args, { stdio: 'ignore', detached: false });
@@ -30,7 +30,7 @@ async function launchDirect({ profileDir, extDir, headless }) {
 }
 
 async function launch({ profileDir, extDir, headless = true, direct = false, args = [] }) {
-  if (direct && profileDir) return launchDirect({ profileDir, extDir, headless });
+  if (direct && profileDir) return launchDirect({ profileDir, extDir, headless, args });
   const dir = profileDir || fs.mkdtempSync(path.join(os.tmpdir(), 'dwx-profile-'));
   const ctx = await chromium.launchPersistentContext(dir, {
     channel: 'chromium', headless, viewport: { width: 1100, height: 800 },

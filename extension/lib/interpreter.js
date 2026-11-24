@@ -165,11 +165,25 @@
     return new win.File([bytes], f.name || 'file', { type: f.type || m[1] || 'application/octet-stream' });
   }
 
+  // file: one File or an array of Files (screenshot first, then page source files). All go in ONE DataTransfer,
+  // so the chat site receives them as a single multi-file upload in the same message.
   function makeDataTransfer(win, file) {
     if (!win.DataTransfer) throw new Error('no DataTransfer');
     var dt = new win.DataTransfer();
-    dt.items.add(file);
+    (Array.isArray(file) ? file : [file]).forEach(function (f) { dt.items.add(f); });
     return dt;
+  }
+  // Best effort: wait until the attachment chips for every file are shown (max of all confirm entries).
+  // Never fails the job; the send step still waits for the send button to be enabled (uploads finished).
+  async function waitForCount(win, doc, selectors, n, timeoutMs, signal) {
+    var t0 = Date.now(), best = 0;
+    for (;;) {
+      if (signal && signal.aborted) throw StepError('attach', 'aborted');
+      best = 0;
+      (selectors || []).forEach(function (sel) { var c = matchOne(doc, sel).length; if (c > best) best = c; });
+      if (best >= n || Date.now() - t0 >= timeoutMs) return best;
+      await new Promise(function (r) { win.setTimeout(r, 150); });
+    }
   }
 
   var ATTACH_STRATEGIES = {
@@ -207,10 +221,12 @@
           try { await waitFor(win, doc, s.selectors, { timeoutMs: s.waitMs, step: 'attach', signal: signal }); } catch (e) { if (e.code === 'aborted') throw e; }
         }
         fn(win, doc, s, promptEl, file);
+        var n = Array.isArray(file) ? file.length : 1, shown = null;
         if (step.confirm && step.confirm.selectors && step.confirm.selectors.length) {
           await waitFor(win, doc, step.confirm.selectors, { timeoutMs: step.confirm.timeoutMs || 15000, step: 'attach', timeoutCode: 'attach_not_confirmed', signal: signal });
+          if (n > 1) shown = await waitForCount(win, doc, step.confirm.selectors, n, step.confirm.timeoutMs || 15000, signal);
         }
-        return { strategy: s.type, index: i };
+        return { strategy: s.type, index: i, count: n, shown: shown };
       } catch (e) {
         if (e && e.code === 'aborted') throw e;
         lastCode = (e && e.code) || 'attach_failed';

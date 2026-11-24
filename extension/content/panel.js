@@ -156,13 +156,13 @@
         scroll.appendChild(row); stickBottom = true; autoscroll();
       },
       note: function (text) { scroll.appendChild(el(doc, 'div', { class: 'note', 'data-role': 'note' }, text)); autoscroll(); },
-      step: function (name, ok, detail) {
+      step: function (name, ok, detail, pageFiles) {
         ensureReply();
         var labels = { instructions: 'Getting ready', prompt: 'Opening ChatGPT', text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: 'ChatGPT is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
         var label = labels[name] || name;
         if ((name === 'send' || name === 'attach') && ok) {
           var haveShot = logEl.querySelector('[data-step=send],[data-step=attach]');
-          logEl.appendChild(el(doc, 'div', { class: haveShot ? 'step hide' : 'step', 'data-step': name, 'data-ok': '1' }, '\u2713 Screenshot sent' + (detail ? ' ' + detail : '')));
+          logEl.appendChild(el(doc, 'div', { class: haveShot ? 'step hide' : 'step', 'data-step': name, 'data-ok': '1' }, (pageFiles > 0 ? '\u2713 Uploaded screenshot + ' + pageFiles + (pageFiles === 1 ? ' file' : ' files') : '\u2713 Screenshot sent') + (detail ? ' ' + detail : '')));
           if (!logEl.querySelector('[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, 'ChatGPT is reading\u2026'));
           spin.classList.remove('off');
           autoscroll();

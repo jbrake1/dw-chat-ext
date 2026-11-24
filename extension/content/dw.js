@@ -122,7 +122,16 @@
     var note = String(d.note || '').slice(0, 5000);
     var shot = typeof d.screenshot === 'string' && DATA_URL.test(d.screenshot) && d.screenshot.length < 20 * 1024 * 1024 ? d.screenshot : null;
     var mime = shot ? DATA_URL.exec(shot)[1] : null;
-    var job = { prompt: buildPrompt({ note: note, pageUrl: d.pageUrl }), file: shot ? { name: 'markup.' + (mime === 'jpeg' ? 'jpg' : mime), type: 'image/' + mime, dataUrl: shot } : null, note: note, hadShot: !!shot };
+    var file = shot ? { name: 'markup.' + (mime === 'jpeg' ? 'jpg' : mime), type: 'image/' + mime, dataUrl: shot } : null;
+    // Page source files (v0.1.3): the page's HTML, same-origin CSS/JS and relevant images, downloaded by the editor.
+    // Untrusted input: allowlisted types, safe names/paths, count and size caps (lib/pagefiles.js).
+    var pf = { files: [], skipped: [] };
+    // The editor's own "Include page files" checkbox decides whether any are sent; the tap fallback never sends files.
+    if (via === 'native' && (Array.isArray(d.files) || Array.isArray(d.skipped))) {
+      pf = DWX.sanitizePageFiles(d.files, d.skipped, { reserved: file ? [file.name] : [] });
+    }
+    var prompt = buildPrompt({ note: note, pageUrl: d.pageUrl }) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
+    var job = { prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl }; }), note: note, hadShot: !!shot };
     submitJob(job);
   }
   function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ChatGPT when you press Resume.'); }
@@ -131,7 +140,7 @@
     if (S.panel) S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
     var p = await fetchPass();                               // fresh pass for every send
     if (!p) { if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
-    var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: { prompt: job.prompt, file: job.file } });
+    var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: { prompt: job.prompt, file: job.file, files: job.files || [] } });
     if (r && r.ok) { S.jobId = r.jobId; return; }
     var code = (r && r.code) || 'unknown';
     if (code === 'paused') return queue(job);
@@ -149,8 +158,10 @@
     var e = msg.event || {};
     var P = S.panel;
     if (e.kind === 'step') {
-      if (P) P.step(e.step, e.ok !== false, e.detail && (e.detail.strategy || e.detail.source || (e.detail.selectorIndex != null ? '#' + e.detail.selectorIndex : '')) );
-      if (S.wantEvents) toPage('dw-ext-step', { step: e.step, ok: e.ok !== false });
+      if (P) P.step(e.step, e.ok !== false, e.detail && (e.detail.strategy || e.detail.source || (e.detail.selectorIndex != null ? '#' + e.detail.selectorIndex : '')), e.step === 'attach' && e.detail ? e.detail.pageFiles : null);
+      var stepMsg = { step: e.step, ok: e.ok !== false };
+      if (e.step === 'attach' && e.detail && typeof e.detail.pageFiles === 'number') { stepMsg.files = Math.max(0, Math.min(50, e.detail.pageFiles | 0)); stepMsg.shot = e.detail.shot !== false; }
+      if (S.wantEvents) toPage('dw-ext-step', stepMsg);
     } else if (e.kind === 'chunk') {
       if (P) P.setReply(e.text, e.files);
       if (S.wantEvents) toPage('dw-ext-chunk', { jobId: msg.jobId, seq: e.seq, text: e.text, files: files2(e.files) });

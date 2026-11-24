@@ -125,9 +125,12 @@
             var how = I.setText(win, promptEl, job.prompt, steps.prompt.setText, steps.prompt.clearFirst);
             emit({ kind: 'step', step: 'text', ok: true, detail: { strategy: how } });
           } else if (op === 'attach') {
-            if (!job.file) continue;
-            var file = I.fileFromDataUrl(win, job.file);
-            var a = await I.attachFile(win, doc, steps.attach, promptEl, file, ac.signal);
+            // The screenshot first, then any page source files, all in one upload (same message).
+            var list = (job.file ? [job.file] : []).concat(Array.isArray(job.files) ? job.files : []);
+            if (!list.length) continue;
+            var fileObjs = list.map(function (f) { return I.fileFromDataUrl(win, f); });
+            var a = await I.attachFile(win, doc, steps.attach, promptEl, fileObjs.length === 1 ? fileObjs[0] : fileObjs, ac.signal);
+            a.count = list.length; a.pageFiles = list.length - (job.file ? 1 : 0); a.shot = !!job.file;
             emit({ kind: 'step', step: 'attach', ok: true, detail: a });
           } else if (op === 'send') {
             ctl.baseline = I.countMessages(doc, instr);

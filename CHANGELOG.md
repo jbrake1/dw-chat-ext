@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.3 — staging only (not released)
+
+- Suggest an edit now sends the page's source files with the screenshot by default. The editor (`/markup/markup.js`) downloads the page's own HTML as stored in /files (it removes the editor loader, affiliate tag and free-site credit that the server adds when it serves the page), its same-origin stylesheets and scripts, and up to 4 same-origin images (named in the note, under the drawing, or visible when Send was pressed). The editor's own scripts (`/markup/`, `/_dw/`, the affiliate tag) and third-party files are never sent; third-party files are listed as "not attached".
+- Caps: 10 files, 2 MB per file, 6 MB in total, 10 seconds to collect. Anything skipped is listed in the prompt with the reason.
+- `dw-ext-submit` gains `files: [{name, path, mime, size, dataUrl}]` and `skipped: [{path, reason}]`. The extension re-checks everything (`lib/pagefiles.js`): allowlisted extensions only (html, css, js, json, svg, png, jpg, gif, webp), MIME taken from the extension and never from the page, safe names and absolute paths without `..`, duplicate names renamed, the same caps enforced again in the service worker.
+- The chat tab uploads the screenshot and every page file in one multi-file upload, in the same message. The prompt lists each file with its path and asks for the COMPLETE updated file in its own code block, with the same name and path.
+- "Include page files (HTML, CSS, JS, images)" checkbox in the editor note box, ticked by default; the choice is remembered in the browser. Unticked sends the screenshot only, as in v0.1.2.
+- Feed steps: "Collecting page files (n)" and "Uploaded screenshot + n files". `dw-ext-step` for `attach` carries `files` (the page-file count).
+- Fix: the extension status line in the note box no longer picks up the text tool's red dashed style.
+
 ## v0.1.2 — 2026-11-23
 
 - Suggest an edit now draws a persistent in-editor transcript (`#dw-ext-feed`) after Send: the user's note plus a page-local screenshot thumbnail, status steps ("Screenshot sent" → "ChatGPT is reading…"), streaming assistant text with safe markdown, Pause / Stop, and auto-scroll. The editor hello is `{ panel: true, wantEvents: true }`, so the extension does not inject its own panel on DW editor pages.

@@ -1,13 +1,13 @@
 /* DW Chat Integration service worker (MV3).
  * Thin router: pairs one AI chat tab, checks the editor pass, loads/validates the site instructions, hands a job to the
  * chat tab's content script and relays its events back to the DW tab. No chat-site selectors live here. */
-importScripts('../lib/util.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
+importScripts('../lib/util.js', '../lib/pagefiles.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
 
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
 const GREEN = { 16: 'icons/green-16.png', 32: 'icons/green-32.png', 48: 'icons/green-48.png', 128: 'icons/green-128.png' };
 const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'content/chatgpt.js'];
-const DW_FILES = ['lib/util.js', 'lib/status.js', 'content/panel.js', 'content/dw.js'];
+const DW_FILES = ['lib/util.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'content/panel.js', 'content/dw.js'];
 const ses = chrome.storage.session, loc = chrome.storage.local;
 
 // ---------- static data ----------
@@ -193,10 +193,18 @@ async function handleSubmit(sender, msg) {
   const j = msg.job || {};
   if (typeof j.prompt !== 'string' || !j.prompt || j.prompt.length > 20000) return { ok: false, code: 'bad_job' };
   if (j.file && (typeof j.file.dataUrl !== 'string' || j.file.dataUrl.length > 25 * 1024 * 1024)) return { ok: false, code: 'bad_job' };
+  // Page source files (v0.1.3): re-checked here with the same allowlist and caps the content script used.
+  let pageFiles = [];
+  if (j.files != null) {
+    if (!Array.isArray(j.files) || j.files.length > DWX.PAGE_FILE_LIMITS.maxFiles) return { ok: false, code: 'bad_job' };
+    const chk = DWX.sanitizePageFiles(j.files, [], { reserved: j.file ? [j.file.name] : [] });
+    if (chk.files.length !== j.files.length) return { ok: false, code: 'bad_job' };
+    pageFiles = chk.files.map((f) => ({ name: f.name, type: f.type, dataUrl: f.dataUrl }));
+  }
   const id = newId();
   S.jobs[id] = { id, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now() };
   S.activeJobId = id;
-  payloads[id] = { prompt: j.prompt, file: j.file || null };
+  payloads[id] = { prompt: j.prompt, file: j.file || null, files: pageFiles };
   await persist();
   await broadcast();
   const r = await dispatch(id, false);

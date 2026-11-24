@@ -70,7 +70,10 @@
   function doSend() {
     if (sendBtn.disabled) return;
     var t = text(), fs = files.slice();
-    window.__received.push({ text: t, files: fs.map(function (f) { return { name: f.name, size: f.size, type: f.type }; }) });
+    var rec = { text: t, files: fs.map(function (f) { return { name: f.name, size: f.size, type: f.type }; }) };
+    window.__received.push(rec);
+    // keep the text of small text files so tests can check exactly what the chat received
+    fs.forEach(function (f, i) { if (/^text\//.test(f.type) && f.size < 300000 && typeof f.text === 'function') f.text().then(function (x) { rec.files[i].text = x; }); });
     var u = document.createElement('div'); u.className = 'msg'; u.setAttribute('data-message-author-role', 'user'); u.textContent = t; thread.appendChild(u);
     prompt.innerHTML = '<p><br></p>'; files = []; attachments.textContent = '';
     streaming = true; sendBtn.replaceWith(stopBtn);
@@ -81,6 +84,7 @@
       if (V === 2) { a2.removeAttribute('data-message-author-role'); a2.setAttribute('data-role', 'assistant'); }
       md = document.createElement('div'); md.className = V === 2 ? 'prose' : 'markdown'; var p = document.createElement('p'); md.appendChild(p); a2.appendChild(md); thread.appendChild(a2);
       var words = ['OK.', 'Received', 'your', 'request', '(' + t.length + ' chars)', 'and', fs.length ? ('a screenshot named ' + fs[0].name + ' (' + fs[0].size + ' bytes).') : 'no screenshot.'];
+      if (fs.length > 1) words.push('Also ' + (fs.length - 1) + ' more files: ' + fs.slice(1).map(function (f) { return f.name; }).join(', ') + '.');
       for (var i = words.length; i < NTOK; i++) words.push('word' + i);
       var i2 = 0; var out = '';
       timer = setInterval(function () {
