@@ -23,6 +23,8 @@
     var steps = instr.steps;
     var stream = instr.stream;
     var elementMap = new Map();
+    var uploads = !!job.file || (Array.isArray(job.files) && job.files.length > 0);       // nothing to blame on a limit when no file was sent
+    var pageFileCount = Array.isArray(job.files) ? job.files.length : 0;
     var ctl = {
       paused: false, stopRequested: false, finished: false, sent: false, seq: 0,
       observer: null, detector: null, timers: [], lastEmitAt: 0, trailing: null, pendingFinal: null,
@@ -38,12 +40,19 @@
       ctl.timers = [];
       if (ctl.trailing != null) { win.clearTimeout(ctl.trailing); ctl.trailing = null; }
     }
-    function fail(step, code) {
+    function fail(step, code, extra) {
       if (ctl.finished) return;
       var wasSent = ctl.sent;
       var partial = ctl.last;
+      // A ChatGPT upload-limit notice looks like "no reply" (or a failed upload): say what really happened, once.
+      if (!extra && uploads && code !== 'aborted' && code !== 'not_logged_in' && (step === 'stream' || step === 'attach' || step === 'send')) {
+        var lim = null; try { lim = I.detectLimit(win, doc, partial && partial.newMessage ? partial.text : '', instr, job.prompt); } catch (e) { lim = null; }
+        if (lim) { code = lim.code; extra = lim; }
+      }
       cleanup();
-      emit({ kind: 'error', step: step, code: code, sent: wasSent, fatal: true, text: partial ? partial.text : '' });
+      var evt = { kind: 'error', step: step, code: code, sent: wasSent, fatal: true, text: partial ? partial.text : '' };
+      if (extra && extra.code === 'file_limit') { evt.retryAfter = extra.retryAfter || ''; evt.retryDay = extra.retryDay || ''; evt.pageFiles = pageFileCount; }
+      emit(evt);
       result.resolve({ ok: false, step: step, code: code });
     }
 
@@ -88,6 +97,10 @@
       // generation began (stop button seen) and has ended, but no assistant message was ever found: the reply selector is probably stale
       if (ctl.sawStop && !ctl.sawMessage && !st.present.stop && ctl.grace == null) {
         ctl.grace = later(function () { if (!ctl.sawMessage) fail('stream', 'no_reply'); }, stream.noReplyGraceMs || 8000);
+      }
+      if (uploads && !st.error && !ctl.limitBefore) {                                   // the notice (not a reply) appeared after this send
+        var lim = null; try { lim = I.detectLimit(win, doc, st.newMessage ? st.text : '', instr, job.prompt); } catch (e) { lim = null; }
+        if (lim) return fail('stream', lim.code, lim);
       }
       if (st.error) return fail('stream', st.error);
       emitChunk(false);
@@ -135,6 +148,7 @@
             emit({ kind: 'step', step: 'attach', ok: true, detail: a });
           } else if (op === 'send') {
             ctl.baseline = I.countMessages(doc, instr);
+            try { ctl.limitBefore = !!(uploads && I.detectLimit(win, doc, '', instr, job.prompt)); } catch (e) { ctl.limitBefore = false; }   // a notice left from an earlier try
             var s = await I.clickSend(win, doc, steps.send, promptEl, ac.signal);
             ctl.sent = true;
             emit({ kind: 'step', step: 'send', ok: true, detail: s });

@@ -115,6 +115,12 @@
     var t = (S.cfg.promptTemplate || '{note}');
     return t.replace('{host}', location.hostname).replace('{pageUrl}', String(d.pageUrl || location.href)).replace('{note}', String(d.note || '(no note)'));
   }
+  // "tomorrow after 4:37 PM" from the extension's own event; only plain time/day text is accepted.
+  function limitWhen(e) {
+    var time = typeof e.retryAfter === 'string' && /^\d{1,2}(?::\d{2})?(?: ?[AP]M)?$/.test(e.retryAfter) ? e.retryAfter : '';
+    var day = e.retryDay === 'tomorrow' || e.retryDay === 'today' ? e.retryDay : '';
+    return { time: time, day: day, phrase: time ? (day ? day + ' ' : '') + 'after ' + time : 'later' };
+  }
   function onSubmitEvent(d, via) {
     if (!S.active || !S.relay) return;                       // inactive or user switched the relay off: do nothing
     if (via === 'tap' && S.nativeHook) return;               // page has its own hook; ignore the tap
@@ -131,7 +137,7 @@
       pf = DWX.sanitizePageFiles(d.files, d.skipped, { reserved: file ? [file.name] : [] });
     }
     var prompt = buildPrompt({ note: note, pageUrl: d.pageUrl }) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
-    var job = { prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl }; }), note: note, hadShot: !!shot };
+    var job = { prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot };
     submitJob(job);
   }
   function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ChatGPT when you press Resume.'); }
@@ -180,8 +186,12 @@
       if (S.wantEvents) toPage('dw-ext-done', { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files), blocks: blocks2(e.blocks) });
     } else if (e.kind === 'error') {
       var text = { not_logged_in: 'ChatGPT tab is not signed in.', no_stream: 'ChatGPT did not start answering.', done_timeout: 'ChatGPT took too long.', rate_limited: 'ChatGPT says the rate limit was hit.' }[e.code];
+      // ChatGPT's free-tier file limit: a clear message, the time ChatGPT gave (plain text only), and the page-file count
+      // so the editor can offer a text + screenshot retry. Nothing is clicked on the ChatGPT page.
+      var when = e.code === 'file_limit' ? limitWhen(e) : null;
+      if (when) text = 'ChatGPT\u2019s file limit was reached. Try again ' + when.phrase + ', or send without page files.';
       if (P) P.error((text || ('Relay problem at step \u201c' + e.step + '\u201d: ' + e.code + '.')) + (e.sent ? '' : ' Nothing was sent.'));
-      if (S.wantEvents) toPage('dw-ext-error', { jobId: msg.jobId, code: e.code, step: e.step });
+      if (S.wantEvents) toPage('dw-ext-error', when ? { jobId: msg.jobId, code: e.code, step: e.step, retryAfter: when.time, retryDay: when.day, pageFiles: Math.max(0, Math.min(50, e.pageFiles | 0)) } : { jobId: msg.jobId, code: e.code, step: e.step });
     } else if (e.kind === 'status' && P) { P.note(e.state === 'paused' ? 'Paused.' : 'Resumed.'); }
   });
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.5 — 2026-11-24
+
+- **Attach files** in Suggest an edit: add your own files (images, HTML, CSS, JS, JSON, SVG, PDF, text) with the picker or by dragging them onto the page, each with an optional "put it at" path such as `/images/new-logo.png`. Same limits as page files, counted together (10 files, 2 MB each, 6 MB in all). A file with no path is only shown to the AI.
+- The extension re-checks every attached file (same allowlist, now with pdf and txt) and uploads it to ChatGPT in the same message as the screenshot and page files; the prompt says where each file should go and asks for `File: /path` in the reply.
+- When the reply names one of your files by its path, the editor stages it from your original bytes (a picture never has to come back as text); files the AI changes come back as code as before. Everything is a preview first, with Publish and Discard.
+- ChatGPT's free-tier file limit ("You're out of data analysis for now…") is now recognised instead of ending as `no_reply`: the editor says "ChatGPT's file limit was reached. Try again after <time>, or send without page files." and offers **Send without page files** (note and screenshot only). The extension only reads the notice; it never clicks an upgrade button.
+
+The packaged zip is `dw-chat-ext-v0.1.5.zip` (74,185 bytes), md5 `39951cf771de283d7b28c2f80c55535d`. Official download: [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html).
+
 ## v0.1.4 — 2026-11-24
 
 - When the AI's reply contains complete updated files that match the page files sent with the request, Suggest an edit now uploads each one to /files as a **staged preview**. Visitors still see the live site. The editor gets a card with **Publish**, **Discard** and **Show preview (reload)**, plus a countdown: previews expire in 10 minutes. Publish asks for confirmation, then makes the preview live (the previous version is kept in /files history). Discard drops the preview and leaves the live site unchanged.

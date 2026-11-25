@@ -18,6 +18,7 @@
   var SPEED = Number(q.get('speed') || 30), NTOK = Number(q.get('tokens') || 40), FAIL = q.get('fail');
   var NOFILEINPUT = q.get('fileinput') === '0', LOGGEDOUT = q.get('loggedout') === '1';
   var HTMLDOC = q.get('html') === '1';  // reply also contains a whole updated page in a code box (staging e2e)
+  var EDIT = q.get('edit') || '';        // v0.1.4: reply returns edited copies of the received html/css files ("File: /path" + code box)
   var ID = { 1: { prompt: 'prompt-textarea', send: 'send-button', stop: 'stop-button', attach: 'attachment-thumbnail' },
              2: { prompt: 'composer-input', send: 'composer-send', stop: 'composer-halt', attach: 'composer-file-chip' } }[V];
   var thread = document.getElementById('thread'), attachments = document.getElementById('attachments');
@@ -73,11 +74,30 @@
     var rec = { text: t, files: fs.map(function (f) { return { name: f.name, size: f.size, type: f.type }; }) };
     window.__received.push(rec);
     // keep the text of small text files so tests can check exactly what the chat received
-    fs.forEach(function (f, i) { if (/^text\//.test(f.type) && f.size < 300000 && typeof f.text === 'function') f.text().then(function (x) { rec.files[i].text = x; }); });
+    var texts = fs.map(function (f, i) { return (/^text\//.test(f.type) && f.size < 3000000 && typeof f.text === 'function') ? f.text().then(function (x) { if (f.size < 300000) rec.files[i].text = x; return x; }) : Promise.resolve(null); });
     var u = document.createElement('div'); u.className = 'msg'; u.setAttribute('data-message-author-role', 'user'); u.textContent = t; thread.appendChild(u);
     prompt.innerHTML = '<p><br></p>'; files = []; attachments.textContent = '';
     streaming = true; sendBtn.replaceWith(stopBtn);
     if (FAIL === 'ratelimit') { var a = document.createElement('div'); a.setAttribute('role', 'alert'); a.textContent = 'Too many requests. Please slow down.'; document.body.appendChild(a); finish(); return; }
+    // v0.1.5: ChatGPT's free-tier limit notice. fail=limit: a banner outside the thread and no reply at all (what a real
+    // account showed); fail=limit_msg: the same words as a short assistant message. The upgrade link records clicks.
+    if (FAIL === 'limit' || FAIL === 'limit_msg') {
+      var NOTICE = ['You\u2019re out of data analysis for now. ', 'Start a free Plus trial', ' for more, or try again tomorrow after 4:37 PM.'];
+      if (FAIL === 'limit') {
+        var bn = document.createElement('div'); bn.className = 'banner'; bn.setAttribute('data-testid', 'usage-banner');
+        var bp = document.createElement('p'); bp.appendChild(document.createTextNode(NOTICE[0]));
+        var up = document.createElement('a'); up.href = '#plus'; up.textContent = NOTICE[1]; up.addEventListener('click', function () { window.__upgradeClicked = (window.__upgradeClicked || 0) + 1; });
+        bp.appendChild(up); bp.appendChild(document.createTextNode(NOTICE[2])); bn.appendChild(bp);
+        var tp = document.createElement('button'); tp.type = 'button'; tp.textContent = 'Try Plus'; tp.addEventListener('click', function () { window.__upgradeClicked = (window.__upgradeClicked || 0) + 1; }); bn.appendChild(tp);
+        document.body.appendChild(bn); finish(); return;
+      }
+      setTimeout(function () {
+        var m1 = document.createElement('div'); m1.className = 'msg'; m1.setAttribute('data-message-author-role', 'assistant');
+        if (V === 2) { m1.removeAttribute('data-message-author-role'); m1.setAttribute('data-role', 'assistant'); }
+        var m2 = document.createElement('div'); m2.className = V === 2 ? 'prose' : 'markdown'; var m3 = document.createElement('p'); m3.textContent = NOTICE.join(''); m2.appendChild(m3); m1.appendChild(m2); thread.appendChild(m1); finish();
+      }, 200);
+      return;
+    }
     var a2 = document.createElement('div'); var md;
     setTimeout(function () {
       a2.className = 'msg'; a2.setAttribute('data-message-author-role', 'assistant');
@@ -89,7 +109,7 @@
       var i2 = 0; var out = '';
       timer = setInterval(function () {
         out += (i2 ? ' ' : '') + words[i2++]; p.textContent = out;
-        if (i2 >= words.length) { clearInterval(timer); timer = null; links(md); finish(); }
+        if (i2 >= words.length) { clearInterval(timer); timer = null; links(md); if (EDIT) edits(md).then(finish); else finish(); }
       }, SPEED);
     }, 300);
     stopBtn.onclick = function () { if (timer) { clearInterval(timer); timer = null; } finish(); };
@@ -103,6 +123,34 @@
       md2.appendChild(d);
       if (HTMLDOC) { var pre = document.createElement('pre'); var code = document.createElement('code'); code.textContent = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>Updated</title></head><body><h1>Family owned since 1998</h1></body></html>'; pre.appendChild(code); md2.appendChild(pre); }
       s.addEventListener('click', function (e) { e.preventDefault(); window.__events.push('sandbox-click'); });
+    }
+    // Edited copies: the page h1 text becomes EDIT; every CSS file gets a marked rule. Paths come from the prompt list.
+    function edits(md2) {
+      return Promise.all(texts).then(function (tx) {
+        // v0.1.5: a binary file the user added (a picture): the AI says to use it as it is, no code block
+        var addRe2 = /- ([A-Za-z0-9._-]+): a file I am adding, to be put on the site at (\/[^\s(]+) \((image\/[a-z+]+|application\/pdf)/g, bm;
+        while ((bm = addRe2.exec(t))) { var bp = document.createElement('p'); bp.textContent = 'Use ' + bm[1] + ' as it is. File: ' + bm[2]; md2.appendChild(bp); }
+        fs.forEach(function (f, i) {
+          var x = tx[i]; if (x == null) return;
+          var pm = new RegExp('- ' + f.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ': (?:current source of|a file I am adding, to be put on the site at) (/[^\\s(]+) ').exec(t);
+          var path = pm ? pm[1] : '/' + f.name, out = null, lang = '';
+          if (/\.html?$/i.test(f.name)) {
+            out = x.replace(/(<h1\b[^>]*>)[\s\S]*?(<\/h1>)/i, '$1' + EDIT + '$2'); lang = 'html';
+            // v0.1.5: the page uses the files the user added (their own paths from the prompt list)
+            var addRe = /- [A-Za-z0-9._-]+: a file I am adding, to be put on the site at (\/[^\s(]+) \((image\/[a-z+]+|text\/css)/g, am;
+            while ((am = addRe.exec(t))) {
+              if (am[2] === 'text/css') out = out.replace('</head>', '<link rel="stylesheet" href="' + am[1] + '"></head>');
+              else out = out.replace('</body>', '<img id="att-img" src="' + am[1] + '" width="40" height="40" alt="added"></body>');
+            }
+          }
+          else if (/\.css$/i.test(f.name)) { out = x.replace(/\s*$/, '\n') + '/* dw-e2e */\nh1{outline:3px solid #e11d48}\n'; lang = 'css'; }
+          if (out == null || out === x) return;
+          var p = document.createElement('p'); p.textContent = 'File: ' + path; md2.appendChild(p);
+          var pre = document.createElement('pre'); var hd = document.createElement('div'); hd.textContent = lang; var cb = document.createElement('button'); cb.textContent = 'Copy code';
+          var code = document.createElement('code'); code.className = 'language-' + lang; code.textContent = out;
+          pre.appendChild(hd); pre.appendChild(cb); pre.appendChild(code); md2.appendChild(pre);
+        });
+      });
     }
     function finish() { streaming = false; stopBtn.replaceWith(sendBtn); refresh(); }
   }

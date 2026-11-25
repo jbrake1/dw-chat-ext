@@ -370,9 +370,60 @@
     return { newMessage: newMessage, text: text, files: files, present: present, error: error, signature: signature, nonEmpty: text.length > 0 || files.length > 0 };
   }
 
+
+  // ChatGPT's free-tier file / data-analysis limit ("You're out of data analysis for now. Start a free Plus trial for more,
+  // or try again tomorrow after 4:37 PM."). It is a notice, not a reply, so without this the job ends as no_reply.
+  // Detection only reads text. Nothing on the page is ever clicked for it (no "Try Plus" / upgrade button).
+  var LIMIT_RES = [
+    /\b(?:you(?:'|\u2019)?re|you are|you have)\s+(?:currently\s+)?out of\s+(?:data analysis|file uploads?|uploads?|image generations?)\b/i,
+    /\b(?:reached|hit|exceeded)\s+(?:your|the)\s+(?:free\s+)?(?:plan(?:'|\u2019)?s?\s+)?(?:limit|cap)s?\s+(?:for|on)\s+(?:data analysis|file uploads?|uploads?)\b/i,
+    /\b(?:data analysis|file uploads?|uploads?)(?:\s+limit)?\s+(?:limit\s+)?(?:reached|exceeded)\b/i
+  ];
+  var LIMIT_SKIP = 'textarea, [contenteditable], script, style, noscript';                 // plain HTML; chat messages come from the instructions
+  function limitMatch(t) { t = String(t || ''); for (var i = 0; i < LIMIT_RES.length; i++) if (LIMIT_RES[i].test(t)) return true; return false; }
+  // Time and day from the notice text: "...try again tomorrow after 4:37 PM." -> {retryAfter: '4:37 PM', retryDay: 'tomorrow'}
+  function limitWhen(t) {
+    t = String(t || '').replace(/\s+/g, ' ');
+    var m = /(?:\b(tomorrow|today)\s+)?\bafter\s+(\d{1,2}(?::\d{2})?\s*[AaPp]\.?[Mm]\.?|\d{1,2}:\d{2})/i.exec(t);
+    if (!m) return { retryAfter: '', retryDay: '' };
+    return { retryAfter: m[2].replace(/\./g, '').replace(/\s+/g, ' ').toUpperCase().replace(/^(\d{1,2}(?::\d{2})?)([AP]M)$/, '$1 $2'), retryDay: (m[1] || '').toLowerCase() };
+  }
+  // Looks for the notice outside the chat messages and the prompt box (replyText: the newest assistant text, only a
+  // short reply that is itself the notice counts). Returns {code:'file_limit', retryAfter, retryDay} or null.
+  function safeClosest(el, sel) { try { return !!(el.closest && el.closest(sel)); } catch (e) { return false; } }
+  function detectLimit(win, doc, replyText, instr, sentText) {
+    var ctx = null, skip = [LIMIT_SKIP];
+    var st = instr && instr.steps;
+    [st && st.assistantMessage, st && st.prompt].forEach(function (step) {
+      ((step && step.selectors) || []).forEach(function (sel) { var c = normSel(sel).css; if (c) skip.push(c); });
+    });
+    skip = skip.join(', ');
+    if (replyText && replyText.length < 500 && limitMatch(replyText)) ctx = replyText;
+    if (ctx == null && doc.body) {
+      var w = doc.createTreeWalker(doc.body, 4, null), n, seen = 0;
+      while ((n = w.nextNode()) && seen++ < 20000) {
+        var v = n.nodeValue; if (!v || v.length < 12 || v.length > 600 || !limitMatch(v)) continue;
+        if (sentText && String(sentText).indexOf(v.trim()) >= 0) continue;            // my own message, whatever it says
+        var par = n.parentElement; if (!par || safeClosest(par, skip)) continue;
+        var blk = par, up = 0;                                                       // the notice's own block: the time may sit in a sibling node
+        ctx = v;
+        while (blk && up < 4 && blk !== doc.body) {
+          var bt = blk.textContent || '';
+          if (bt.length > 800) break;
+          ctx = bt; if (limitWhen(bt).retryAfter) break;
+          blk = blk.parentElement; up++;
+        }
+        break;
+      }
+    }
+    if (ctx == null) return null;
+    var when = limitWhen(ctx);
+    return { code: 'file_limit', retryAfter: when.retryAfter, retryDay: when.retryDay };
+  }
+
   return {
     StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
     isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, clickSend: clickSend,
-    readState: readState, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
+    readState: readState, detectLimit: detectLimit, limitMatch: limitMatch, limitWhen: limitWhen, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
   };
 });
