@@ -3,7 +3,7 @@
  * Events go to hooks.emit(evt):
  *   {kind:'step', step, ok, detail}        progress of each interpreter step
  *   {kind:'chunk', seq, text, files}       snapshot of the assistant reply so far (relayed live; held while paused)
- *   {kind:'done', status:'complete'|'stopped', text, files}
+ *   {kind:'done', status:'complete'|'stopped', text, files, blocks:[{label, lang, code}]}
  *   {kind:'error', step, code, sent, fatal}
  */
 (function (root, factory) {
@@ -68,7 +68,8 @@
       if (ctl.finished) return;
       var s = ctl.last || { text: '', files: [] };
       cleanup();
-      var evt = { kind: 'done', status: status, text: s.text, files: s.files };
+      var evt = { kind: 'done', status: status, text: s.text, files: s.files, blocks: [] };
+      try { evt.blocks = I.readBlocks(win, doc, instr, ctl.baseline); } catch (e) { evt.blocks = []; }
       if (ctl.paused) { ctl.pendingFinal = evt; ctl.finished = true; }
       else { emit({ kind: 'chunk', seq: ++ctl.seq, text: s.text, files: s.files }); emit(evt); }
       result.resolve({ ok: true, status: status, text: s.text });

@@ -310,6 +310,35 @@
     return out;
   }
 
+  // v0.1.4: the code blocks of the newest reply, in order, each with the text just before it (where the model writes
+  // "File: /path"). Read once, when the reply is done. Code comes from the <code> element (no "Copy code" header).
+  var BLOCK_LIM = { blocks: 12, code: 2 * 1024 * 1024, total: 6 * 1024 * 1024, label: 300 };
+  function readBlocks(win, doc, instr, baseline) {
+    var steps = instr.steps, out = [], total = 0;
+    var msgs = resolveAll(doc, steps.assistantMessage.selectors).els;
+    if (msgs.length <= baseline) return out;
+    var target = (steps.assistantMessage.pick === 'first-new') ? msgs[baseline] : msgs[msgs.length - 1];
+    var SHOW_TEXT = 4, between = '', inPre = null;
+    var walker = doc.createTreeWalker(target, SHOW_TEXT, null);
+    function preOf(n) { var e = n.parentNode; while (e && e !== target) { if (e.nodeName === 'PRE') return e; e = e.parentNode; } return null; }
+    var node;
+    while ((node = walker.nextNode())) {
+      var pre = preOf(node);
+      if (!pre) { inPre = null; between += node.data; if (between.length > 4000) between = between.slice(-4000); continue; }
+      if (pre === inPre) continue;
+      inPre = pre;
+      if (out.length >= BLOCK_LIM.blocks) break;
+      var code = pre.querySelector('code');
+      var text = code ? code.textContent : textOf(pre).replace(/^[^\n]{0,24}\n(?:Copy(?: code)?\n)?/, '');
+      var lm = /(?:^|\s)language-([A-Za-z0-9+#._-]{1,20})/.exec((code && code.getAttribute('class')) || '');
+      if (text.length > BLOCK_LIM.code || total + text.length > BLOCK_LIM.total) { between = ''; continue; }
+      total += text.length;
+      out.push({ label: norm(between).slice(-BLOCK_LIM.label), lang: lm ? lm[1].toLowerCase() : '', code: text });
+      between = '';
+    }
+    return out;
+  }
+
   function countMessages(doc, instr) {
     return resolveAll(doc, instr.steps.assistantMessage.selectors).els.length;
   }
@@ -344,6 +373,6 @@
   return {
     StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
     isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, clickSend: clickSend,
-    readState: readState, readFiles: readFiles, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
+    readState: readState, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
   };
 });

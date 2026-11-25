@@ -150,6 +150,16 @@
   }
 
   // ---------- events from the service worker ----------
+  // v0.1.4: reply code blocks for the editor to stage as a /files preview. Strings only, capped again here.
+  function blocks2(bs) {
+    var out = [], total = 0;
+    (Array.isArray(bs) ? bs : []).slice(0, 12).forEach(function (b) {
+      if (!b || typeof b.code !== 'string' || b.code.length > 2 * 1024 * 1024 || total + b.code.length > 6 * 1024 * 1024) return;
+      total += b.code.length;
+      out.push({ label: String(b.label || '').slice(-300), lang: /^[A-Za-z0-9+#._-]{0,20}$/.test(String(b.lang || '')) ? String(b.lang || '').toLowerCase() : '', code: b.code });
+    });
+    return out;
+  }
   function files2(fs) { return (fs || []).map(function (f) { return { name: f.name, url: f.url, kind: f.kind, needsTab: !!f.needsTab }; }); }
   chrome.runtime.onMessage.addListener(function (msg, sender) {
     if (sender.id !== chrome.runtime.id || !msg) return;
@@ -167,7 +177,7 @@
       if (S.wantEvents) toPage('dw-ext-chunk', { jobId: msg.jobId, seq: e.seq, text: e.text, files: files2(e.files) });
     } else if (e.kind === 'done') {
       if (P) P.done(e.status);
-      if (S.wantEvents) toPage('dw-ext-done', { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files) });
+      if (S.wantEvents) toPage('dw-ext-done', { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files), blocks: blocks2(e.blocks) });
     } else if (e.kind === 'error') {
       var text = { not_logged_in: 'ChatGPT tab is not signed in.', no_stream: 'ChatGPT did not start answering.', done_timeout: 'ChatGPT took too long.', rate_limited: 'ChatGPT says the rate limit was hit.' }[e.code];
       if (P) P.error((text || ('Relay problem at step \u201c' + e.step + '\u201d: ' + e.code + '.')) + (e.sent ? '' : ' Nothing was sent.'));

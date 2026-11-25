@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.4 — 2026-11-24
+
+- When the AI's reply contains complete updated files that match the page files sent with the request, Suggest an edit now uploads each one to /files as a **staged preview**. Visitors still see the live site. The editor gets a card with **Publish**, **Discard** and **Show preview (reload)**, plus a countdown: previews expire in 10 minutes. Publish asks for confirmation, then makes the preview live (the previous version is kept in /files history). Discard drops the preview and leaves the live site unchanged.
+- The extension reads each code block in the reply, with the "File: /path" text just above it, and sends those blocks back to the editor (`dw-ext-done` now includes `blocks: [{label, lang, code}]`, capped at 12 blocks, 2 MB each, 6 MB in total). With an older extension, the editor still takes the page HTML from the reply text.
+- The editor also strips any form of the on-page editor loader from the HTML it sends, so the AI edits the file as stored in /files (the v0.1.3.1 loader-strip fix).
+- `/_dw/ext/report` and `/_dw/ext/files` stay disabled on production. Staged saves go through the editor's own server (`POST /markup/?a=files`), not through those endpoints.
+
+The packaged zip is `dw-chat-ext-v0.1.4.zip` (71,476 bytes), md5 `8389c6234a45ceef4f2e7567aec37d08`. Official download: [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html). Versions 0.1.3, 0.1.2, 0.1.1 and 0.1.0 remain available on that page.
+
 ## v0.1.3 — 2026-11-23
 
 - Suggest an edit now sends the page's source files with the screenshot by default. The editor (`/markup/markup.js`) downloads the page's own HTML as stored in /files (it removes the editor loader, affiliate tag and free-site credit that the server adds when it serves the page), its same-origin stylesheets and scripts, and up to 4 same-origin images (named in the note, under the drawing, or visible when Send was pressed). The editor's own scripts (`/markup/`, `/_dw/`, the affiliate tag) and third-party files are never sent; third-party files are listed as "not attached".
