@@ -6,8 +6,8 @@
 <!-- Mock of gemini.google.com (best-effort mimic of the public DOM, NOT verified against the live site):
      side nav New chat, top bar model picker + Upgrade, input-area-v2 > uploader ("+") + rich-textarea (.ql-editor) + send-button,
      user-query / model-response turns, message-content .markdown, code-block with a .code-block-decoration header.
-     Query: speed, tokens, fileinput=0 (menu has no file input: drop/paste only), menu=0 (no "+" input at all), limit=1,
-     signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
+     Query: speed, tokens, (2026 UI: the "Upload & tools" menu has NO file input; its "Upload files" item creates one and calls input.click(), which the extension's page hook answers. Without the hook only drop/paste work), menu=0 (no "+" input at all), limit=1,
+     attach=0 (uploads silently ignored), signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
 <nav>
   <side-nav-action-button data-test-id="new-chat-button"><a href="/app" aria-label="New chat"><mat-icon>edit_square</mat-icon><span>New chat</span></a></side-nav-action-button>
   <div><a href="/library">Library</a></div>
@@ -22,7 +22,7 @@
   <input-area-v2>
     <div class="file-preview-container" id="previews"></div>
     <xap-uploader-dropzone id="dropzone">
-      <uploader id="uploader"><button class="upload-card-button" aria-label="Open upload file menu"><mat-icon>add</mat-icon></button></uploader>
+      <uploader id="uploader"><button class="upload-card-button" aria-label="Upload &amp; tools" aria-haspopup="menu" aria-expanded="false"><mat-icon>add</mat-icon></button></uploader>
       <rich-textarea><div class="ql-editor ql-blank textarea" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Enter a prompt for Gemini" data-placeholder="Ask Gemini"><p><br></p></div></rich-textarea>
     </xap-uploader-dropzone>
     <div class="send-button-container"><button class="send-button" aria-label="Send message" aria-disabled="true"><mat-icon>send</mat-icon></button></div>
@@ -33,7 +33,7 @@
 (function () {
   var q = new URLSearchParams(location.search);
   var SPEED = Number(q.get('speed') || 20), NTOK = Number(q.get('tokens') || 20);
-  var NOINPUT = q.get('fileinput') === '0', NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0';
+  var NOATTACH = q.get('attach') === '0', NOINPUT = false, NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0';
   window.__received = []; window.__forbidden = []; window.__menuOpened = 0; window.__newChat = 0;
   var hist = document.getElementById('chat-history'), previews = document.getElementById('previews');
   var prompt = document.querySelector('.ql-editor'), send = document.querySelector('.send-button'), uploader = document.getElementById('uploader');
@@ -68,24 +68,29 @@
   dz.addEventListener('dragover', function (e) { e.preventDefault(); });
   dz.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) addFiles(Array.prototype.slice.call(e.dataTransfer.files)); });
 
-  // "+" menu: renders the menu items and a hidden file input inside <uploader> while open.
+  // "Upload & tools" menu (2026 UI, from public reports): there is NO file input on the page. The visible "Upload files" item
+  // creates a detached <input type=file>, hooks its change event and calls input.click() (the OS file chooser).
+  // A hidden decoy button sits next to it in the same wrapper.
   uploader.querySelector('button').addEventListener('click', function () {
     if (NOMENU) return;
     window.__menuOpened++;
     if (uploader.querySelector('.menu')) return;
     var m = document.createElement('div'); m.className = 'menu'; m.setAttribute('role', 'menu');
-    m.innerHTML = '<button role="menuitem" data-test-id="local-images-files-uploader-button">Upload files</button><button role="menuitem">Add from Drive</button><button role="menuitem">Photos</button>';
-    m.querySelector('[data-test-id]').addEventListener('click', function () { window.__forbidden.push('os-file-chooser'); });
-    if (!NOINPUT) {
-      var inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.name = 'Filedata'; inp.className = 'hidden';
+    m.innerHTML = '<images-files-uploader data-test-id="uploader-images-files-button-advanced"><button class="hidden-local-file-image-selector-button hidden" aria-hidden="true">decoy</button><button role="menuitem" aria-label="Upload files. Documents, data, code files"><span>Upload files</span></button></images-files-uploader><button role="menuitem">Add from Drive</button><button role="menuitem">Photos</button><button role="menuitem" aria-label="Import code">Import code</button>';
+    m.querySelector('.hidden-local-file-image-selector-button').addEventListener('click', function () { window.__forbidden.push('decoy-button'); });
+    m.querySelector('images-files-uploader button[role=menuitem]').addEventListener('click', function () {
+      window.__chooserCalls = (window.__chooserCalls || 0) + 1;
+      var inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true;
       inp.addEventListener('change', function () { addFiles(Array.prototype.slice.call(inp.files)); });
-      m.appendChild(inp);
-    }
+      inp.click();
+      m.remove();
+    });
     uploader.appendChild(m);
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { var m = uploader.querySelector('.menu'); if (m) m.remove(); } });
 
   function addFiles(list) {
+    if (NOATTACH) return;                                                         // ?attach=0: Gemini silently ignores every upload
     uploading = true; refresh();
     setTimeout(function () {
       list.forEach(function (f) {

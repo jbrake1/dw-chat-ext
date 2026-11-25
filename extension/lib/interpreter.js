@@ -208,15 +208,77 @@
   }
   // Best effort: wait until the attachment chips for every file are shown (max of all confirm entries).
   // Never fails the job; the send step still waits for the send button to be enabled (uploads finished).
-  async function waitForCount(win, doc, selectors, n, timeoutMs, signal) {
+  // v0.1.9: per-selector match counts. Confirmation looks for GROWTH against the counts taken before the attempt, so a chip,
+  // a "Remove" button or a blob thumbnail that was already on the page can never be mistaken for the new upload.
+  function snapCounts(doc, selectors) { return (selectors || []).map(function (sel) { return matchOne(doc, sel).length; }); }
+  function growth(doc, selectors, before) {          // the largest increase over any one selector (one chip per file)
+    var now = snapCounts(doc, selectors), best = 0;
+    for (var i = 0; i < now.length; i++) { var g = now[i] - (before[i] || 0); if (g > best) best = g; }
+    return best;
+  }
+  async function waitForGrowth(win, doc, selectors, before, n, timeoutMs, signal) {
     var t0 = Date.now(), best = 0;
     for (;;) {
       if (signal && signal.aborted) throw StepError('attach', 'aborted');
-      best = 0;
-      (selectors || []).forEach(function (sel) { var c = matchOne(doc, sel).length; if (c > best) best = c; });
+      best = growth(doc, selectors, before);
       if (best >= n || Date.now() - t0 >= timeoutMs) return best;
       await new Promise(function (r) { win.setTimeout(r, 150); });
     }
+  }
+
+  // ---------- v0.1.9: page-world upload hook (content/ai-hook.js) ----------
+  function postHook(win, msg) {
+    try { win.postMessage(Object.assign({ source: 'dw-ext-hook' }, msg), win.location.origin || '*'); } catch (e) { win.postMessage(Object.assign({ source: 'dw-ext-hook' }, msg), '*'); }
+  }
+  function hookWait(win, type, ms) {
+    return new Promise(function (res, rej) {
+      var t = null;
+      function done() { win.removeEventListener('message', on); if (t != null) win.clearTimeout(t); }
+      function on(ev) {
+        var d = ev && ev.data;
+        if ((!ev.source || ev.source === win) && d && d.source === 'dw-ext-hook-reply' && d.type === type) { done(); res(d); }
+      }
+      win.addEventListener('message', on);
+      t = win.setTimeout(function () { done(); rej(StepError('attach', 'hook_timeout')); }, ms);
+    });
+  }
+  async function ensureHook(win, env) {
+    var pong = hookWait(win, 'pong', 500); postHook(win, { type: 'ping' });
+    try { await pong; return; } catch (e) { /* not there yet: ask the service worker to inject it */ }
+    if (env && env.ensureHook) { try { await env.ensureHook(); } catch (e) {} }
+    var pong2 = hookWait(win, 'pong', 2000); postHook(win, { type: 'ping' });
+    try { await pong2; } catch (e) { throw StepError('attach', 'hook_unavailable'); }
+  }
+
+  // The text files of a job as plain text for the "send them inside the message" fallback. Images and binaries are
+  // skipped (and counted). Returns { text, used, skipped, bytes }.
+  var TEXT_EXT = /\.(html?|css|js|mjs|json|txt|md|xml|svg|csv|tsv|php|py|rb|ya?ml|toml|ini|sh|ts|jsx|tsx|vue|svelte|sql|log)$/i;
+  var TEXT_MIME = /^(text\/|application\/(json|javascript|xml|x-yaml|x-sh|x-php)|image\/svg)/i;
+  function inlineFilesText(win, list, cfg) {
+    cfg = cfg || {};
+    var maxTotal = cfg.maxBytes || 120000, maxOne = cfg.maxFileBytes || 60000;
+    var out = '', used = 0, skipped = 0, bytes = 0;
+    (list || []).forEach(function (f) {
+      var name = f.path || f.name || 'file';
+      if (!(TEXT_MIME.test(f.type || f.mime || '') || TEXT_EXT.test(name))) { skipped++; return; }
+      var m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(f.dataUrl || '');
+      if (!m) { skipped++; return; }
+      var txt;
+      try {
+        if (m[2]) {
+          var bin = win.atob(m[3]), u8 = new win.Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+          txt = new win.TextDecoder('utf-8').decode(u8);
+        } else txt = decodeURIComponent(m[3]);
+      } catch (e) { skipped++; return; }
+      if (txt.length > maxOne) txt = txt.slice(0, maxOne) + '\n[... cut: file longer than ' + maxOne + ' characters ...]';
+      var block = '\n\n----- FILE: ' + name + ' -----\n' + txt + '\n----- END FILE: ' + name + ' -----';
+      if (bytes + block.length > maxTotal) { skipped++; return; }
+      out += block; bytes += block.length; used++;
+    });
+    if (!used) return { text: '', used: 0, skipped: skipped, bytes: 0 };
+    var head = '\n\n[The upload to this chat did not work, so the contents of ' + used + (used === 1 ? ' file is' : ' files are') + ' pasted below instead. There is no screenshot' + (skipped ? '; ' + skipped + ' other file' + (skipped === 1 ? ' was' : 's were') + ' left out' : '') + '.]';
+    return { text: head + out, used: used, skipped: skipped, bytes: bytes };
   }
 
   var ATTACH_STRATEGIES = {
@@ -261,6 +323,31 @@
         }
       }
     },
+    // v0.1.9 (Gemini): open the site's upload menu, arm the page-world hook with the files, click the site's own
+    // "Upload files" item. The site calls input.click() to open the OS file chooser; the hook hands the files to that
+    // input instead, so no dialog ever appears. Menu and item clicks go through the guard (never Upgrade, model picker, ...).
+    hookedChooser: async function (win, doc, strat, promptEl, file, signal, guard, env) {
+      var files = Array.isArray(file) ? file : [file];
+      await ensureHook(win, env);
+      var open = resolve(doc, strat.openSelectors).el;
+      if (!open) throw StepError('attach', 'selector_not_found');
+      try {
+        if (!(open.getAttribute && open.getAttribute('aria-expanded') === 'true')) safeClick(open, guard, 'attach');
+        var it = await waitFor(win, doc, strat.itemSelectors, { timeoutMs: strat.waitMs || 4000, step: 'attach', signal: signal, accept: function (el) { return !blockedByGuard(el, guard); } });
+        var armed = hookWait(win, 'armed', 2000);
+        postHook(win, { type: 'arm', files: files, ttlMs: 8000 });
+        try { await armed; } catch (e) { throw StepError('attach', 'hook_unavailable'); }   // postMessage is async: be armed BEFORE the click
+        var fired = hookWait(win, 'fired', 4000);
+        fired.catch(function () {});
+        try { it.el.scrollIntoView && it.el.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+        safeClick(it.el, guard, 'attach');
+        try { await fired; } catch (e) { throw StepError('attach', 'chooser_not_hooked'); }
+      } finally {
+        postHook(win, { type: 'disarm' });
+        try { (doc.activeElement || doc.body).dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })); } catch (e) {}
+        try { promptEl && promptEl.focus && promptEl.focus(); } catch (e) {}
+      }
+    },
     drop: function (win, doc, strat, promptEl, file) {
       var target = strat.selectors ? (resolve(doc, strat.selectors).el || promptEl) : promptEl;
       var dt = makeDataTransfer(win, file);
@@ -270,30 +357,39 @@
     }
   };
 
-  async function attachFile(win, doc, step, promptEl, file, signal, guard) {
+  async function attachFile(win, doc, step, promptEl, file, signal, guard, env) {
     var strategies = step.strategies || [];
-    var lastCode = 'attach_failed';
+    var lastCode = 'attach_failed', trace = [];
+    var conf = step.confirm && step.confirm.selectors && step.confirm.selectors.length ? step.confirm : null;
+    var n = Array.isArray(file) ? file.length : 1;
     for (var i = 0; i < strategies.length; i++) {
       var s = strategies[i];
       var fn = ATTACH_STRATEGIES[s.type];
       if (!fn) continue;
+      var t0 = Date.now();
+      var before = conf ? snapCounts(doc, conf.selectors) : [];
       try {
         if (s.type === 'fileInput' && s.waitMs) {
           try { await waitFor(win, doc, s.selectors, { timeoutMs: s.waitMs, step: 'attach', signal: signal }); } catch (e) { if (e.code === 'aborted') throw e; }
         }
-        await fn(win, doc, s, promptEl, file, s.type === 'menuFileInput' ? signal : undefined, guard);
-        var n = Array.isArray(file) ? file.length : 1, shown = null;
-        if (step.confirm && step.confirm.selectors && step.confirm.selectors.length) {
-          await waitFor(win, doc, step.confirm.selectors, { timeoutMs: step.confirm.timeoutMs || 15000, step: 'attach', timeoutCode: 'attach_not_confirmed', signal: signal });
-          if (n > 1) shown = await waitForCount(win, doc, step.confirm.selectors, n, step.confirm.timeoutMs || 15000, signal);
+        await fn(win, doc, s, promptEl, file, (s.type === 'menuFileInput' || s.type === 'hookedChooser') ? signal : undefined, guard, env);
+        var shown = null;
+        if (conf) {
+          var ms = s.confirmMs || conf.timeoutMs || 15000;
+          await waitUntil(win, doc, function () { return growth(doc, conf.selectors, before) > 0; }, { timeoutMs: ms, step: 'attach', timeoutCode: 'attach_not_confirmed', signal: signal });
+          if (n > 1) shown = await waitForGrowth(win, doc, conf.selectors, before, n, Math.min(ms, 5000), signal);
         }
-        return { strategy: s.type, index: i, count: n, shown: shown };
+        trace.push(s.type + ':ok:' + (Date.now() - t0));
+        return { strategy: s.type, index: i, count: n, shown: shown, trace: trace };
       } catch (e) {
         if (e && (e.code === 'aborted' || e.code === 'blocked_click')) throw e;
         lastCode = (e && e.code) || 'attach_failed';
+        trace.push(s.type + ':' + lastCode + ':' + (Date.now() - t0));
       }
     }
-    throw StepError('attach', lastCode === 'selector_not_found' || lastCode === 'attach_not_confirmed' ? lastCode : 'attach_failed');
+    var err = StepError('attach', lastCode === 'selector_not_found' || lastCode === 'attach_not_confirmed' ? lastCode : 'attach_failed');
+    err.trace = trace;
+    throw err;
   }
 
   // ---------- send ----------
@@ -507,7 +603,7 @@
 
   return {
     StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
-    isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, clickSend: clickSend,
+    isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, inlineFilesText: inlineFilesText, growth: growth, clickSend: clickSend,
     readNotice: readNotice, waitUntil: waitUntil, safeClick: safeClick, blockedByGuard: blockedByGuard,
     readState: readState, detectLimit: detectLimit, limitMatch: limitMatch, limitWhen: limitWhen, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
   };

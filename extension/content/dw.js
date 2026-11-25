@@ -261,6 +261,8 @@
       if (P) P.step(e.step, e.ok !== false, e.detail && (e.detail.strategy || e.detail.source || (e.detail.selectorIndex != null ? '#' + e.detail.selectorIndex : '')), e.step === 'attach' && e.detail ? e.detail.pageFiles : null);
       var stepMsg = { step: e.step, ok: e.ok !== false };
       if (e.step === 'attach' && e.detail && typeof e.detail.pageFiles === 'number') { stepMsg.files = Math.max(0, Math.min(50, e.detail.pageFiles | 0)); stepMsg.shot = e.detail.shot !== false; }
+      if (e.step === 'attach_inline' && e.detail) stepMsg.files = Math.max(0, Math.min(50, e.detail.files | 0));
+      if (e.step === 'send' && e.detail && e.detail.inline) stepMsg.inline = true;
       if (S.wantEvents) toPage('dw-ext-step', stepMsg);
     } else if (e.kind === 'chunk') {
       if (P) P.setReply(e.text, e.files);

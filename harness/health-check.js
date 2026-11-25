@@ -33,7 +33,7 @@ function run(instr, snaps, opts = {}) {
   const s = instr.steps;
   add('idle', 'prompt', s.prompt.selectors);
   // v0.1.6: a site whose file input only appears once its upload menu is opened (menuFileInput) is checked by its menu button.
-  const menu = s.attach.strategies.find((x) => x.type === 'menuFileInput');
+  const menu = s.attach.strategies.find((x) => x.type === 'menuFileInput' || x.type === 'hookedChooser');
   const fi = (s.attach.strategies.find((x) => x.type === 'fileInput') || {}).selectors;
   if (menu) add('idle', 'attach.menu', menu.openSelectors);
   else if (fi) add('idle', 'attach.fileInput', fi);

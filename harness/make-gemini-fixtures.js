@@ -15,9 +15,8 @@ function fast() { const i = geminiInstr(); i.stream.done.all[2].ms = 100; i.stre
   let w = await mockGemini('?speed=30&tokens=12'); save('idle', w);
   // typing: text in, menu opened, files attached (before Send)
   const pr = w.document.querySelector('.ql-editor'); pr.textContent = 'Change the headline'; pr.dispatchEvent(new w.Event('input', { bubbles: true }));
-  w.document.querySelector('uploader button').click();
-  const inp = w.document.querySelector('uploader input[type=file]'); const dt = new w.DataTransfer(); dt.items.add(new w.File(['x'], 'markup.jpg', { type: 'image/jpeg' }));
-  Object.defineProperty(inp, 'files', { value: dt.files }); inp.dispatchEvent(new w.Event('change', { bubbles: true }));
+  const dt = new w.DataTransfer(); dt.items.add(new w.File(['x'], 'markup.jpg', { type: 'image/jpeg' }));
+  w.document.getElementById('dropzone').dispatchEvent(new w.DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
   await sleep(350); save('typing', w);
   // streaming + replied
   w = await mockGemini('?speed=40&tokens=20');

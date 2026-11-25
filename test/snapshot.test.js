@@ -134,3 +134,13 @@ test('does not use eval or setInterval', () => {
   assert.equal(/\beval\s*\(|new Function\(/.test(s), false);
   assert.equal(/setInterval\(/.test(s), false);
 });
+
+test('v0.1.9: byte budget counts each byte once, so a deep page is not cut off before the composer (v0.1.8 cut Gemini off in its sidebar)', () => {
+  const items = Array.from({ length: 500 }, (_, i) => `<a class="item" href="/c/${i}" aria-label="Chat ${i}"><span class="t">x</span></a>`).join('');
+  let nested = items;
+  for (let d = 0; d < 12; d++) nested = `<div class="w${d}">${nested}</div>`;     // old accounting: ~13x the real size
+  const { res } = snap(`<!doctype html><html><body><nav>${nested}</nav><main><rich-textarea><div class="ql-editor" contenteditable="true" role="textbox"></div></rich-textarea></main></body></html>`);
+  assert.equal(res.stats.truncated, false);
+  assert.ok(res.dom.includes('<rich-textarea>') && res.dom.includes('ql-editor'));
+  assert.ok(res.stats.bytes < 150000 && res.stats.bytes > 30000, String(res.stats.bytes));
+});

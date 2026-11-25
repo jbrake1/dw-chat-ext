@@ -71,22 +71,28 @@
           "type": "object", "required": ["strategies"], "additionalProperties": false,
           "properties": {
             "strategies": {
-              "type": "array", "minItems": 1, "maxItems": 4,
+              "type": "array", "minItems": 1, "maxItems": 6,
               "items": {
                 "type": "object", "required": ["type"], "additionalProperties": false,
                 "properties": {
-                  "type": { "enum": ["fileInput", "menuFileInput", "paste", "drop"] },
+                  "type": { "enum": ["fileInput", "menuFileInput", "hookedChooser", "paste", "drop"] },
                   "selectors": { "$ref": "#/definitions/selectors" },
                   "openSelectors": { "$ref": "#/definitions/selectors" },
                   "itemSelectors": { "$ref": "#/definitions/selectors" },
                   "closeMenu": { "type": "boolean" },
-                  "waitMs": { "type": "integer", "minimum": 0, "maximum": 30000 }
+                  "waitMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
+                  "confirmMs": { "type": "integer", "minimum": 500, "maximum": 120000, "description": "v0.1.9: how long to wait for the attachment to show after THIS strategy (overrides confirm.timeoutMs)." }
                 }
               }
             },
             "confirm": {
               "type": "object", "required": ["selectors"], "additionalProperties": false,
               "properties": { "selectors": { "$ref": "#/definitions/selectors" }, "timeoutMs": { "type": "integer", "minimum": 500, "maximum": 120000 } }
+            },
+            "inlineFallback": {
+              "type": "object", "additionalProperties": false,
+              "description": "v0.1.9: when no strategy attaches the files, send the text files inside the message instead (no screenshot) and say so.",
+              "properties": { "maxBytes": { "type": "integer", "minimum": 1000, "maximum": 400000 }, "maxFileBytes": { "type": "integer", "minimum": 1000, "maximum": 200000 } }
             }
           }
         },

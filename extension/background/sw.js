@@ -394,7 +394,7 @@ async function onGptEvent(sender, msg) {
   const job = S.jobs[msg.jobId];
   if (!job || !S.pair || !sender.tab || sender.tab.id !== job.gptTabId) return { ok: false };
   const evt = msg.event || {};
-  if (evt.kind === 'error') dl('gpt_error', { job: job.id, step: evt.step, code: evt.code, sent: evt.sent });
+  if (evt.kind === 'error') dl('gpt_error', { job: job.id, step: evt.step, code: evt.code, sent: evt.sent, trace: evt.trace });
   else if (evt.kind === 'step') dl('gpt', { kind: 'step', step: evt.step, ok: evt.ok !== false, job: job.id });
   else if (evt.kind === 'done') dl('gpt', { kind: 'done', status: evt.status, job: job.id });
   else if (evt.kind === 'chunk' && evt.seq === 1) dl('gpt', { kind: 'chunk1', job: job.id });
@@ -540,6 +540,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tid = sender.tab && sender.tab.id;
         if (!S.tabs[tid] || sender.frameId !== 0) return { ok: false };
         try { await chrome.scripting.executeScript({ target: { tabId: tid }, files: ['content/dw-tap.js'], world: 'MAIN' }); } catch (e) { return { ok: false }; }
+        return { ok: true };
+      }
+      case 'gpt:hook': {
+        // v0.1.9: inject the page-world upload hook into the AI tab that asked (only a paired/known AI host, top frame).
+        const tid = sender.tab && sender.tab.id;
+        if (!tid || sender.frameId !== 0 || !(await getConfig()).aiSites[hostOf(sender.url)]) return { ok: false };
+        try { await chrome.scripting.executeScript({ target: { tabId: tid }, files: ['content/ai-hook.js'], world: 'MAIN' }); dl('inject', { tab: tid, ok: true, how: 'hook' }); } catch (e) { dl('inject', { tab: tid, ok: false, code: 'hook_failed', msg: e && e.message }); return { ok: false }; }
         return { ok: true };
       }
       case 'dw:deactivate': if (sender.tab) await deactivateTab(sender.tab.id); return { ok: true };

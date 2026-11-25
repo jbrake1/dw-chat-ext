@@ -178,7 +178,7 @@
       step: function (name, ok, detail, pageFiles) {
         ensureReply();
         var nameAi = L(state.provider || 'chatgpt');
-        var labels = { instructions: 'Getting ready', open_tab: 'Opening ' + nameAi, newChat: 'New chat', prompt: 'Opening ' + nameAi, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: nameAi + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
+        var labels = { instructions: 'Getting ready', open_tab: 'Opening ' + nameAi, newChat: 'New chat', prompt: 'Opening ' + nameAi, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: nameAi + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions', attach_inline: nameAi + ' did not take the upload, so the files went in the message as text (no screenshot)' };
         var label = labels[name] || name;
         if ((name === 'send' || name === 'attach') && ok) {
           var haveShot = logEl.querySelector('[data-step=send],[data-step=attach]');

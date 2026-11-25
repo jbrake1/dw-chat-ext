@@ -21,7 +21,8 @@
       emit({ kind: 'error', step: 'run', code: 'host_mismatch', sent: false, fatal: true });
       return;
     }
-    var ctl = DWX.runJob(window, instr, msg.job, { emit: emit });
+    // v0.1.9: the page-world upload hook (content/ai-hook.js) may need injecting into a tab that was already open.
+    var ctl = DWX.runJob(window, instr, msg.job, { emit: emit, ensureHook: function () { return chrome.runtime.sendMessage({ type: 'gpt:hook' }).catch(function () { return null; }); } });
     // Keeps the MV3 service worker from idling out while the reply is slow to start. Not DOM polling.
     current = { jobId: jobId, ctl: ctl, keepalive: setInterval(function () { send({ type: 'gpt:keepalive' }); }, 20000) };
   }

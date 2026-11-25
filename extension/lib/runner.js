@@ -43,7 +43,7 @@
     }
     // v0.1.6: when a step fails for a generic reason, a known notice on the page (usage limit, sign-in wall) explains it better.
     var GENERIC = { selector_not_found: 1, attach_not_confirmed: 1, attach_failed: 1, send_not_found: 1, no_stream: 1, no_reply: 1, done_timeout: 1, text_not_accepted: 1, timeout: 1 };
-    function fail(step, code, extra) {
+    function fail(step, code, extra, trace) {
       if (ctl.finished) return;
       if (GENERIC[code]) { try { var nc = I.readNotice(doc, instr); if (nc) code = nc; } catch (e) {} }
       var wasSent = ctl.sent;
@@ -55,6 +55,7 @@
       }
       cleanup();
       var evt = { kind: 'error', step: step, code: code, sent: wasSent, fatal: true, text: partial ? partial.text : '' };
+      if (trace && trace.length) evt.trace = trace.slice(0, 8).map(function (x) { return String(x).slice(0, 60); });
       if (extra && extra.code === 'file_limit') { evt.retryAfter = extra.retryAfter || ''; evt.retryDay = extra.retryDay || ''; evt.pageFiles = pageFileCount; }
       emit(evt);
       result.resolve({ ok: false, step: step, code: code });
@@ -165,7 +166,21 @@
             var list = (job.file ? [job.file] : []).concat(Array.isArray(job.files) ? job.files : []);
             if (!list.length) continue;
             var fileObjs = list.map(function (f) { return I.fileFromDataUrl(win, f); });
-            var a = await I.attachFile(win, doc, steps.attach, promptEl, fileObjs.length === 1 ? fileObjs[0] : fileObjs, ac.signal, guard);
+            var a = null;
+            try {
+              a = await I.attachFile(win, doc, steps.attach, promptEl, fileObjs.length === 1 ? fileObjs[0] : fileObjs, ac.signal, guard, { ensureHook: hooks.ensureHook });
+            } catch (ae) {
+              // v0.1.9: no upload strategy worked. If the instructions allow it, send the text files inside the message
+              // (no screenshot) and say so, instead of failing the whole request.
+              var fb = steps.attach.inlineFallback;
+              var recoverable = ae && (ae.code === 'attach_not_confirmed' || ae.code === 'attach_failed' || ae.code === 'selector_not_found');
+              var inl = (fb && recoverable) ? I.inlineFilesText(win, job.files || [], fb) : null;
+              if (!inl || !inl.used) { if (ae) ae.trace = ae.trace || null; throw ae; }
+              I.setText(win, promptEl, job.prompt + inl.text, steps.prompt.setText, true);
+              ctl.inline = true;
+              emit({ kind: 'step', step: 'attach_inline', ok: true, detail: { files: inl.used, skipped: inl.skipped, bytes: inl.bytes, trace: (ae.trace || []).slice(0, 8) } });
+              continue;
+            }
             a.count = list.length; a.pageFiles = list.length - (job.file ? 1 : 0); a.shot = !!job.file;
             emit({ kind: 'step', step: 'attach', ok: true, detail: a });
           } else if (op === 'send') {
@@ -173,13 +188,13 @@
             try { ctl.limitBefore = !!(uploads && I.detectLimit(win, doc, '', instr, job.prompt)); } catch (e) { ctl.limitBefore = false; }   // a notice left from an earlier try
             var s = await I.clickSend(win, doc, steps.send, promptEl, ac.signal, guard);
             ctl.sent = true;
-            emit({ kind: 'step', step: 'send', ok: true, detail: s });
+            emit({ kind: 'step', step: 'send', ok: true, detail: ctl.inline ? Object.assign({}, s, { inline: true }) : s });
           }
         }
         startWatching();
       } catch (e) {
         if (e && e.code === 'aborted') { cleanup(); result.resolve({ ok: false, code: 'aborted' }); return; }
-        fail((e && e.step) || 'run', (e && e.code) || 'unknown');
+        fail((e && e.step) || 'run', (e && e.code) || 'unknown', undefined, e && e.trace);
       }
     })();
 

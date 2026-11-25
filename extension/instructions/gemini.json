@@ -1,17 +1,11 @@
 {
   "schemaVersion": 1,
   "site": "gemini",
-  "revision": 1,
-  "version": "2026.11.24-1",
-  "minExtVersion": "0.1.6",
+  "revision": 2,
+  "version": "2026.11.24-2",
+  "minExtVersion": "0.1.9",
   "verified": false,
-  "notes": "UNVERIFIED against a live signed-in gemini.google.com: built 2026-11-24 from public knowledge of Gemini's web DOM (Angular custom elements: rich-textarea with a Quill .ql-editor, uploader + 'Open upload file menu' button, send-button / Stop response, user-query and model-response turns, message-content .markdown, code-block with a .code-block-decoration header) plus saved fixtures (harness/snapshots/gemini-fixture-*.html). The owner's screenshot (Pro plan, 2026-11-24) shows the home page 'Where should we start?', an 'Ask Gemini' input, a '+' upload/tools button on its left, a model picker and a mic button. The guard keeps the runner off the model picker, Upgrade, Get app, share/delete/rename/settings. Every step lists fallbacks; attach tries an existing file input, then the '+' menu's file input (never the OS file chooser), then drop, then paste.",
-  "integrity": {
-    "alg": "sha256",
-    "hash": "ae4fd47e211ad99d1579585984df985594ffaf7041216575226e69795bd326f1",
-    "sig": "",
-    "keyId": ""
-  },
+  "notes": "UNVERIFIED against a live signed-in gemini.google.com: built 2026-11-24 from public knowledge of Gemini's web DOM (Angular custom elements: rich-textarea with a Quill .ql-editor, uploader + 'Open upload file menu' button, send-button / Stop response, user-query and model-response turns, message-content .markdown, code-block with a .code-block-decoration header) plus saved fixtures (harness/snapshots/gemini-fixture-*.html). The owner's screenshot (Pro plan, 2026-11-24) shows the home page 'Where should we start?', an 'Ask Gemini' input, a '+' upload/tools button on its left, a model picker and a mic button. The guard keeps the runner off the model picker, Upgrade, Get app, share/delete/rename/settings. Every step lists fallbacks; attach tries an existing file input, then the '+' menu's file input (never the OS file chooser), then drop, then paste. | rev 2 (2026-11-24, from owner snapshot s2b34afff, selectors only): the composer was found (rich-textarea div.ql-editor, input-area-v2, [xapfileselectordropzone], button[aria-label*=upload i], button[aria-label='Send message'], new chat via a[aria-label='New chat']) but NO input[type=file] exists until Gemini's own 'Upload files' menu item runs, and the old 'Open upload file menu' / uploader / uploader-file-preview names do not exist in this build. Public reports say the menu button is now 'Upload & tools' and the item sits in images-files-uploader[data-test-id='uploader-images-files-button-advanced'] next to a hidden decoy button.hidden-local-file-image-selector-button. rev 2 therefore clicks that item with the page-world hook (content/ai-hook.js) so the files go straight to Gemini's own file input and no OS dialog opens; drop and paste stay as fallbacks; the attachment chip is confirmed by NEW matching elements (count above the count before the attempt); and if nothing attaches the text files are sent inside the message (inlineFallback). Chip names are still unverified.",
   "match": {
     "hosts": [
       "gemini.google.com"
@@ -85,54 +79,75 @@
           "type": "fileInput",
           "selectors": [
             "uploader input[type='file']",
-            "input[type='file'][name='Filedata']",
             "input-area-v2 input[type='file']",
-            "input[type='file'][multiple]"
+            "input[type='file'][multiple]",
+            "input[type='file']"
           ],
-          "waitMs": 500
+          "waitMs": 300,
+          "confirmMs": 6000
         },
         {
-          "type": "menuFileInput",
+          "type": "hookedChooser",
           "openSelectors": [
-            "uploader button[aria-label='Open upload file menu']",
+            "button[aria-label='Upload & tools']",
+            "button[aria-label*='upload' i][aria-label*='tools' i]",
+            "[aria-label='Upload & tools']",
             "button[aria-label='Open upload file menu']",
             "button.upload-card-button",
             "uploader button",
             "button[aria-label*='upload' i]",
             "button[aria-label*='add files' i]"
           ],
-          "selectors": [
-            "uploader input[type='file']",
-            "input[type='file'][name='Filedata']",
-            "input[type='file']"
+          "itemSelectors": [
+            "[data-test-id='uploader-images-files-button-advanced'] button:not(.hidden-local-file-image-selector-button)",
+            "images-files-uploader[data-test-id='uploader-images-files-button-advanced'] button:not(.hidden-local-file-image-selector-button)",
+            "[data-test-id='local-images-files-uploader-button']",
+            "button[aria-label^='Upload files' i]",
+            "[role='menuitem'][aria-label^='Upload files' i]",
+            "[data-test-id='uploader-images-files-button-advanced']",
+            {
+              "css": "button, [role='menuitem']",
+              "textMatches": "^\\s*(upload files|files)\\s*$"
+            }
           ],
-          "waitMs": 3000,
-          "closeMenu": true
+          "waitMs": 4000,
+          "confirmMs": 12000
         },
         {
           "type": "drop",
           "selectors": [
-            "xap-uploader-dropzone",
             "[xapfileselectordropzone]",
+            "xap-uploader-dropzone",
             "input-area-v2",
             "rich-textarea"
-          ]
+          ],
+          "confirmMs": 8000
         },
         {
-          "type": "paste"
+          "type": "paste",
+          "confirmMs": 6000
         }
       ],
       "confirm": {
         "selectors": [
           "uploader-file-preview",
+          "uploader-file-preview-container",
           "[data-test-id='file-preview']",
           "[data-test-id='image-preview']",
-          ".file-preview-container .file-preview",
-          "button[aria-label^='Remove file' i]",
-          "button[aria-label^='Remove' i][aria-label*='file' i]",
+          "[data-test-id*='file-preview']",
+          ".file-preview-container",
+          "[class*='file-preview']",
+          "[class*='attachment-preview']",
+          "input-area-v2 [class*='preview'] img",
+          "input-area-v2 button[aria-label^='Remove' i]",
+          "input-area-v2 button[aria-label*='remove file' i]",
           "input-area-v2 img[src^='blob:']"
         ],
-        "timeoutMs": 30000
+        "timeoutMs": 12000
+      },
+      "inlineFallback": {
+        "maxBytes": 120000,
+        "maxFileBytes": 60000
       }
     },
     "send": {
@@ -284,5 +299,11 @@
         }
       ]
     }
+  },
+  "integrity": {
+    "alg": "sha256",
+    "hash": "e627dfa77a3aed5a0c115c361bf650a0c5c4e35d53fb4ad54ac5a33b0b4baec3",
+    "sig": "",
+    "keyId": ""
   }
 }

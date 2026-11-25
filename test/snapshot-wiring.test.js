@@ -6,9 +6,9 @@ const root = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const noServer = !fs.existsSync(path.join(root, 'server/markup/markup.js'));
 
-test('extension 0.1.8: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
+test('extension 0.1.9: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
   const m = JSON.parse(read('extension/manifest.json'));
-  assert.equal(m.version, '0.1.8');
+  assert.equal(m.version, '0.1.9');
   assert.ok(m.content_scripts[1].js.includes('lib/snapshot.js'));
   assert.ok(!m.content_scripts[0].js.includes('lib/snapshot.js'), 'snapshot.js is not injected on editor pages');
   const sw = read('extension/background/sw.js');

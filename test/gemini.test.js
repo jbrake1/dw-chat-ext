@@ -19,13 +19,13 @@ function fast() {
   const i = geminiInstr();
   i.stream.done.all = [{ type: 'newMessage' }, { type: 'absent', step: 'stop' }, { type: 'textStable', ms: 120 }];
   i.stream.emitMinIntervalMs = 0; i.stream.startTimeoutMs = 3000; i.stream.noReplyGraceMs = 600;
-  i.steps.attach.confirm.timeoutMs = 2000; i.steps.send.timeoutMs = 3000; i.steps.prompt.timeoutMs = 2000; i.steps.newChat.timeoutMs = 2000;
+  i.steps.attach.confirm.timeoutMs = 2000; i.steps.attach.strategies.forEach((s) => { if (s.confirmMs) s.confirmMs = 600; }); i.steps.send.timeoutMs = 3000; i.steps.prompt.timeoutMs = 2000; i.steps.newChat.timeoutMs = 2000;
   return i;
 }
 const collect = () => { const ev = []; return { ev, emit: (e) => ev.push(e) }; };
 const snap = (n) => load(path.join(root, 'harness/snapshots', `gemini-fixture-${n}.html`));
 
-test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.6', () => {
+test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.9, rev 2 with the hooked chooser and the inline fallback', () => {
   const i = geminiInstr();
   const ajv = new Ajv({ allErrors: true, strict: false });
   assert.equal(ajv.validate(schema(), i), true, JSON.stringify(ajv.errors));
@@ -33,21 +33,25 @@ test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, un
   const body = Object.assign({}, i); delete body.integrity;
   assert.equal(crypto.createHash('sha256').update(canonical(body)).digest('hex'), i.integrity.hash, 'run npm run seal');
   assert.equal(i.verified, false, 'live Gemini selectors are not verified yet');
-  assert.equal(i.minExtVersion, '0.1.6');
+  assert.equal(i.minExtVersion, '0.1.9'); assert.ok(i.revision >= 2);
+  assert.deepEqual(i.steps.attach.strategies.map((s) => s.type), ['fileInput', 'hookedChooser', 'drop', 'paste']);
+  assert.ok(i.steps.attach.inlineFallback.maxBytes > 0);
+  assert.ok(i.steps.attach.strategies.every((s) => !s.confirmMs || s.confirmMs <= 12000), 'each attempt is bounded');
+  assert.ok(i.steps.attach.strategies[1].openSelectors.includes("button[aria-label='Upload & tools']"));
   assert.deepEqual(i.match.hosts, ['gemini.google.com']);
   assert.equal(i.flow[0], 'newChat', 'always starts a New chat');
   assert.deepEqual(validateSchema(schema(), bundled()), { ok: true, errors: [] }, 'chatgpt.json still valid');
 });
 
-test('full relay against mock Gemini: new chat -> text -> "+" menu file input -> send -> stream -> done, code blocks with File: labels', async () => {
+test('full relay against mock Gemini: new chat -> text -> "Upload & tools" menu + page hook -> send -> stream -> done, code blocks with File: labels', async () => {
   const win = await mockGemini('?speed=5&tokens=15');
   const { ev, emit } = collect();
   const res = await runJob(win, fast(), JOB(), { emit }).promise;
   assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
   assert.deepEqual(ev.filter((e) => e.kind === 'step').map((e) => e.step).slice(0, 6), ['newChat', 'prompt', 'text', 'attach', 'send', 'stream']);
   const attach = ev.find((e) => e.step === 'attach').detail;
-  assert.equal(attach.strategy, 'menuFileInput'); assert.equal(attach.count, 3); assert.equal(attach.pageFiles, 2);
-  assert.equal(win.__menuOpened, 1);
+  assert.equal(attach.strategy, 'hookedChooser'); assert.equal(attach.count, 3); assert.equal(attach.pageFiles, 2); assert.equal(attach.shown, 3);
+  assert.equal(win.__menuOpened, 1); assert.equal(win.__chooserCalls, 1);
   assert.equal(win.document.querySelector('uploader .menu'), null, 'menu closed again');
   assert.deepEqual(win.__received[0].files.map((f) => f.name), ['markup.jpg', 'index.html', 'site.css'], 'one message, screenshot first');
   assert.match(win.__received[0].text, /Family owned since 1998/);
@@ -74,14 +78,63 @@ test('reused tab on an old conversation: clicks New chat first, the old answer i
   assert.equal(win.document.querySelectorAll('model-response').length, 1);
 });
 
-test('no file input in the "+" menu: falls back to dropping the files on the input area', async () => {
-  const win = await mockGemini('?speed=5&tokens=8&fileinput=0');
+test('page hook not available: falls back to dropping the files on the input area', async () => {
+  const win = await mockGemini('?speed=5&tokens=8', { hook: false });
   const { ev, emit } = collect();
   const res = await runJob(win, fast(), JOB(), { emit }).promise;
   assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
-  assert.equal(ev.find((e) => e.step === 'attach').detail.strategy, 'drop');
+  const at = ev.find((e) => e.step === 'attach').detail;
+  assert.equal(at.strategy, 'drop');
+  assert.ok(at.trace.some((t) => /^hookedChooser:hook_unavailable:/.test(t)), at.trace.join());
   assert.equal(win.__received[0].files.length, 3);
   assert.deepEqual(win.__forbidden, []);
+});
+
+test('uploads silently ignored: sends the text files INSIDE the message, says so, and never fails the request', async () => {
+  const win = await mockGemini('?speed=5&tokens=8&attach=0');
+  const { ev, emit } = collect();
+  const t0 = Date.now();
+  const res = await runJob(win, fast(), JOB(), { emit }).promise;
+  assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
+  assert.ok(Date.now() - t0 < 15000, 'bounded');
+  assert.equal(ev.some((e) => e.step === 'attach' && e.ok), false, 'no attach success is reported');
+  const inl = ev.find((e) => e.step === 'attach_inline');
+  assert.equal(inl.ok, true); assert.equal(inl.detail.files, 2); assert.equal(inl.detail.skipped, 0);
+  assert.ok(inl.detail.trace.length >= 3, inl.detail.trace.join());
+  assert.equal(ev.find((e) => e.step === 'send').detail.inline, true);
+  assert.equal(win.__received[0].files.length, 0);
+  assert.match(win.__received[0].text, /Family owned since 1998/);
+  assert.match(win.__received[0].text, /----- FILE: index\.html -----\n<h1>Hi<\/h1>\n----- END FILE: index\.html -----/);
+  assert.match(win.__received[0].text, /did not work, so the contents of 2 files are pasted below/);
+  assert.deepEqual(win.__forbidden, []);
+});
+
+test('a chip, Remove button or thumbnail that was already on the page is not mistaken for the upload', async () => {
+  const win = await mockGemini('?speed=5&tokens=8&attach=0');
+  win.document.getElementById('previews').innerHTML = '<uploader-file-preview><div class="file-preview"><button aria-label="Remove file">x</button></div></uploader-file-preview>';
+  const { ev, emit } = collect();
+  await runJob(win, fast(), JOB(), { emit }).promise;
+  assert.ok(ev.some((e) => e.step === 'attach_inline'), 'growth over the count before the attempt is required');
+});
+
+test('no inlineFallback in the instructions: the failure is reported with a per-strategy trace, sent:false, in bounded time', async () => {
+  const win = await mockGemini('?attach=0');
+  const i = fast(); delete i.steps.attach.inlineFallback;
+  const { ev, emit } = collect();
+  const t0 = Date.now();
+  const res = await runJob(win, i, JOB(), { emit }).promise;
+  assert.equal(res.ok, false); assert.equal(res.code, 'attach_not_confirmed');
+  assert.ok(Date.now() - t0 < 12000);
+  const err = ev.find((e) => e.kind === 'error');
+  assert.equal(err.sent, false); assert.deepEqual(err.trace.map((t) => t.split(':')[0]), ['fileInput', 'hookedChooser', 'drop', 'paste']);
+  assert.equal(win.__received.length, 0);
+});
+
+test('the menu click and the upload item go through the guard: a hijacked "Upload files" selector pointing at Upgrade is refused', async () => {
+  const win = await mockGemini('?speed=5&tokens=5');
+  const i = fast(); i.steps.attach.strategies[1].openSelectors = ['.upgrade'];
+  const res = await runJob(win, i, JOB(), { emit: () => {} }).promise;
+  assert.equal(res.code, 'blocked_click'); assert.deepEqual(win.__forbidden, []);
 });
 
 test('Gemini usage-limit reply is reported as a limit (file_limit from the v0.1.5 detector, or usage_limit), sent, with a clear message', async () => {

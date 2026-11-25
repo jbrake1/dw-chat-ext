@@ -503,8 +503,9 @@ scenarios['gemini-autoopen'] = async (env) => {
   const final = await L.panelText(dw, 'reply');
   c.check('reply_relayed', /Gemini got your request/.test(final || ''), final && final.slice(0, 80));
   const gp = env.ctx.pages().find((p) => p.url().startsWith(env.mock.gemUrl));
-  const rec = gp ? await gp.evaluate(() => ({ received: window.__received, forbidden: window.__forbidden, menu: window.__menuOpened })) : null;
+  const rec = gp ? await gp.evaluate(() => ({ received: window.__received, forbidden: window.__forbidden, menu: window.__menuOpened, chooser: window.__chooserCalls || 0 })) : null;
   c.check('gemini_received_prompt_and_screenshot', rec && rec.received.length === 1 && /Family owned since 1998/.test(rec.received[0].text) && rec.received[0].files[0].name === 'markup.jpg', rec && { n: rec.received.length, files: rec.received[0] && rec.received[0].files.map((f) => f.name) });
+  c.check('upload_files_item_answered_by_page_hook_in_real_chrome', rec && rec.chooser === 1 && rec.received[0].files.length >= 1, rec && { chooser: rec.chooser });
   c.check('used_plus_menu_never_forbidden_buttons', rec && rec.menu >= 1 && rec.forbidden.length === 0, rec && { menu: rec.menu, forbidden: rec.forbidden });
   const title = await dw.evaluate(() => document.getElementById('dw-ext-root').shadowRoot.querySelector('[data-role=title]').textContent);
   c.check('panel_names_gemini', /Gemini/.test(title), title);

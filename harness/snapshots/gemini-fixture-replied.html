@@ -6,8 +6,8 @@
 <!-- Mock of gemini.google.com (best-effort mimic of the public DOM, NOT verified against the live site):
      side nav New chat, top bar model picker + Upgrade, input-area-v2 > uploader ("+") + rich-textarea (.ql-editor) + send-button,
      user-query / model-response turns, message-content .markdown, code-block with a .code-block-decoration header.
-     Query: speed, tokens, fileinput=0 (menu has no file input: drop/paste only), menu=0 (no "+" input at all), limit=1,
-     signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
+     Query: speed, tokens, (2026 UI: the "Upload & tools" menu has NO file input; its "Upload files" item creates one and calls input.click(), which the extension's page hook answers. Without the hook only drop/paste work), menu=0 (no "+" input at all), limit=1,
+     attach=0 (uploads silently ignored), signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
 <nav>
   <side-nav-action-button data-test-id="new-chat-button"><a href="/app" aria-label="New chat"><mat-icon>edit_square</mat-icon><span>New chat</span></a></side-nav-action-button>
   <div><a href="/library">Library</a></div>
@@ -25,7 +25,7 @@
   <input-area-v2>
     <div class="file-preview-container" id="previews"></div>
     <xap-uploader-dropzone id="dropzone">
-      <uploader id="uploader"><button class="upload-card-button" aria-label="Open upload file menu"><mat-icon>add</mat-icon></button></uploader>
+      <uploader id="uploader"><button class="upload-card-button" aria-label="Upload &amp; tools" aria-haspopup="menu" aria-expanded="false"><mat-icon>add</mat-icon></button></uploader>
       <rich-textarea><div class="ql-editor textarea ql-blank" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Enter a prompt for Gemini" data-placeholder="Ask Gemini"><p><br></p></div></rich-textarea>
     </xap-uploader-dropzone>
     <div class="send-button-container"><button class="send-button" aria-label="Send message" aria-disabled="true" disabled=""><mat-icon>send</mat-icon></button></div>

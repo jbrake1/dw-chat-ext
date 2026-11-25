@@ -9,7 +9,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var MAX_BYTES = 400 * 1024;
+  var MAX_BYTES = 300 * 1024;
   var MAX_NODES = 8000;
   var MAX_TEXT = 80;
   var DROP_TAG = /^(SCRIPT|STYLE|LINK|NOSCRIPT|META|TEMPLATE|BASE)$/i;
@@ -129,7 +129,7 @@
     }
     inner += serializeChildren(el, base, state);
     var close = '</' + name + '>';
-    state.bytes += inner.length + close.length;
+    state.bytes += close.length;                                // (children already counted their own bytes)
     if (state.bytes >= MAX_BYTES) { state.truncated = true; }
     return parts + inner + close;
   }

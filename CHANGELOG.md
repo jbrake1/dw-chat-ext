@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.9 — 2026-11-24
+
+- **Gemini upload fixed.** A live snapshot (id s2b34afff) showed there is no `input[type=file]` on the Gemini page until Gemini's own "Upload files" menu item runs, and the old "Open upload file menu" / `uploader` / `uploader-file-preview` names are gone (the menu button is now "Upload & tools"). v0.1.8 tried drop and paste, waited 30 s on each and failed with `attach_not_confirmed` after about 95 s. v0.1.9 opens "Upload & tools", arms a small page-world hook (`content/ai-hook.js`), and clicks Gemini's own "Upload files" item. When Gemini calls `input.click()` to open the OS file chooser, the hook gives the files to that input instead, so no dialog opens. The hook only acts while armed, once, for a few seconds, and talks to nothing. It is injected by the manifest on gemini.google.com and by the service worker into tabs that were already open.
+- **Faster, truthful confirmation.** Each upload attempt has its own short wait (6 to 12 s, 8 s for drop) and a chip counts only if matching elements grew compared with before the attempt, so a "Remove" button or thumbnail already on the page is never taken for the upload. Total worst case is about 35 s, not 95 s.
+- **Inline fallback.** If no strategy attaches the files, Gemini's instructions send the text files inside the message (no screenshot) and the chat window says so ("Gemini did not take the upload, so N files went in the message as text (no screenshot)") instead of failing the request. Images and binaries are left out; size is capped.
+- Errors now carry a per-strategy trace (for example `hookedChooser:selector_not_found:4012`) in the relay log and Copy diagnostics.
+- **Send page snapshot fixed.** v0.1.8 counted bytes twice per nesting level, so on Gemini it stopped in the sidebar and never reached the composer. Each byte is now counted once (cap 300 KB).
+- `instructions/gemini.json` rev 2 (needs extension 0.1.9), schema: new strategy `hookedChooser`, per-strategy `confirmMs`, `attach.inlineFallback`.
+
 ## v0.1.8 — 2026-11-24
 
 - **Send page snapshot** (popup, and the chat window on an error): captures a redacted structure of the paired AI tab (ChatGPT or Gemini) so a selector or layout problem can be diagnosed. It keeps tags, id, class, role, aria-*, data-* and testid, contenteditable/disabled, shadow and iframe structure, and button, label and placeholder text. Chat text and input values become length markers; scripts, styles and query strings are dropped. Each selector in that AI's instructions file is listed with a match count and pass/fail.
