@@ -13,6 +13,13 @@
             nativePanel: false, wantEvents: false, panel: null, lastGesture: 0, jobId: null, pending: null, renewTimer: null, activating: false, activateP: null, cfg: {} };
 
   function send(msg) { return chrome.runtime.sendMessage(msg).catch(function () { return { ok: false, code: 'sw_unreachable' }; }); }
+  function withTimeout(promise, ms, code) {
+    var t;
+    return Promise.race([
+      Promise.resolve(promise).finally(function () { clearTimeout(t); }),
+      new Promise(function (_, rej) { t = setTimeout(function () { rej(Object.assign(new Error(code), { code: code })); }, ms); })
+    ]).catch(function (e) { return { ok: false, code: (e && e.code) || code || 'timeout' }; });
+  }
   function toPage(type, extra) { window.postMessage(Object.assign({ source: 'dw-ext', type: type, v: 1 }, extra || {}), location.origin); }
   function emitStatus() {
     return send({ type: 'dw:pageStatus' }).then(function (r) {
@@ -42,13 +49,14 @@
   // ---------- pass ----------
   async function fetchPass() {
     try {
-      var w = await fetch('/_dw/whoami', { credentials: 'include', cache: 'no-store' });
-      var wj = w.ok ? await w.json() : null;
+      var w = await withTimeout(fetch('/_dw/whoami', { credentials: 'include', cache: 'no-store' }), 8000, 'pass_timeout');
+      if (w && w.ok === false && w.code) return null;
+      var wj = w && w.ok ? await w.json() : null;
       if (!wj || wj.edit !== true) return null;
       var receivedAt;
-      var r = await fetch('/_dw/ext/pass', { method: 'POST', credentials: 'include', cache: 'no-store', headers: { 'X-DW-Ext': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ extVersion: EXT_VERSION }) });
+      var r = await withTimeout(fetch('/_dw/ext/pass', { method: 'POST', credentials: 'include', cache: 'no-store', headers: { 'X-DW-Ext': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ extVersion: EXT_VERSION }) }), 8000, 'pass_timeout');
       receivedAt = Date.now();
-      if (!r.ok) return null;
+      if (!r || !r.ok) return null;
       var pj = await r.json();
       return pj && pj.ok ? { pass: pj, receivedAt: receivedAt } : null;
     } catch (e) { return null; }
@@ -95,7 +103,7 @@
   function mountPanel() {
     if (S.panel || S.nativePanel) return;
     S.panel = DWX.createPanel(document, {
-      onStop: function () { send({ type: 'dw:control', action: 'stop' }); },
+      onStop: function () { localStop(); },
       onPause: function () { send({ type: 'dw:control', action: 'pause' }); },
       onResume: function () { send({ type: 'dw:control', action: 'resume' }); },
       onUnpair: function () { send({ type: 'dw:control', action: 'unpair' }); },
@@ -144,21 +152,42 @@
     var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot };
     submitJob(job);
   }
+  function localStop() {
+    S.stopped = true;
+    S.workGen = (S.workGen || 0) + 1;
+    S.pending = null;
+    S.jobId = null;
+    send({ type: 'dw:control', action: 'stop' });
+    if (S.panel) S.panel.done('stopped');
+    if (S.wantEvents) toPage('dw-ext-done', { status: 'stopped', text: '', files: [] });
+  }
   function aiName(id) { return DWX.providers.label(id || S.state.provider || DWX.providers.DEFAULT_ID); }
   function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ' + aiName(job.provider) + ' when you press Resume.'); }
   async function submitJob(job) {
     if (S.state.paused) return queue(job);                   // nothing new is sent while paused
-    if (S.panel) S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
+    S.jobProvider = job.provider || (S.state && S.state.provider) || DWX.providers.DEFAULT_ID;
+    S.workGen = (S.workGen || 0) + 1;
+    var gen = S.workGen;
+    S.stopped = false;
+    if (S.panel) {
+      S.panel.setState(Object.assign({}, S.state, { active: S.active, provider: S.jobProvider, busy: true }));
+      S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
+    }
     var p = await fetchPass();                               // fresh pass for every send
+    if (gen !== S.workGen || S.stopped) return;
     if (!p) { if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
     var sj = { prompt: job.prompt, file: job.file, files: job.files || [] };
     if (job.provider) sj.provider = job.provider;
-    var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj });
+    var r = await withTimeout(send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj }), 45000, 'relay_timeout');
+    if (gen !== S.workGen || S.stopped) return;
     if (r && r.ok) { S.jobId = r.jobId; S.jobProvider = r.provider || job.provider || S.state.provider; return; }
     var code = (r && r.code) || 'unknown';
     if (code === 'paused') return queue(job);
     var pid = (r && r.provider) || job.provider || S.state.provider;
-    var msg = (['not_paired', 'busy', 'chat_tab_unreachable', 'tab_open_failed'].indexOf(code) >= 0 && DWX.providers.message(pid, code)) || ('Not sent (' + code + ').');
+    var msg = (['not_paired', 'busy', 'chat_tab_unreachable', 'tab_open_failed'].indexOf(code) >= 0 && DWX.providers.message(pid, code))
+      || (code === 'relay_timeout' ? ('Not sent: ' + aiName(pid) + ' did not start in time.') : null)
+      || (code === 'stopped' ? null : ('Not sent (' + code + ').'));
+    if (code === 'stopped') return;
     if (S.panel) S.panel.error(msg);
     if (S.wantEvents) toPage('dw-ext-error', { code: code, step: 'submit' });
   }
@@ -222,7 +251,8 @@
         replyStatus();
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
       else if (d.type === 'dw-ext-provider' && S.active && DWX.providers.valid(d.provider)) send({ type: 'dw:setProvider', provider: d.provider });
-      else if (d.type === 'dw-ext-control' && S.active && ['stop', 'pause', 'resume'].indexOf(d.action) >= 0) send({ type: 'dw:control', action: d.action });
+      else if (d.type === 'dw-ext-control' && d.action === 'stop') localStop();
+      else if (d.type === 'dw-ext-control' && S.active && ['pause', 'resume'].indexOf(d.action) >= 0) send({ type: 'dw:control', action: d.action });
     } else if (d.source === 'dw-edit-tap' && d.type === 'dw-ext-submit') onSubmitEvent(d, 'tap');
   });
   ['pointerdown', 'keydown'].forEach(function (t) { document.addEventListener(t, function (e) { if (e.isTrusted) S.lastGesture = Date.now(); }, true); });

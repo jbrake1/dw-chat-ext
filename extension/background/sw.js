@@ -36,7 +36,7 @@ const store = {
 };
 
 // ---------- session state (survives service-worker restarts, cleared when the browser closes) ----------
-const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false };
+const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false, stopGen: 0 };
 const payloads = {}; // jobId -> {prompt, file} kept in memory only until the prompt is sent
 const iconLog = {};  // tabId -> 'green'|'grey' (debug/test visibility)
 const ready = (async () => {
@@ -80,6 +80,12 @@ async function setPairBadge(tabId, on) {
   } catch (e) {}
 }
 function tell(tabId, msg) { return chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }).catch(() => null); }
+function withTimeout(promise, ms, code) {
+  let t;
+  const p = Promise.resolve(promise);
+  const to = new Promise((_, rej) => { t = setTimeout(() => rej(Object.assign(new Error(code), { code })), ms); });
+  return Promise.race([p, to]).finally(() => clearTimeout(t));
+}
 
 function publicState(tabId) {
   const t = S.tabs[tabId];
@@ -130,7 +136,9 @@ async function ensureProviderTab(providerId, dwTabId) {
   if (tabId == null) {
     const opts = { url: ((cfg.devNewChatUrls || {})[providerId]) || P.newChatUrl, active: false };
     if (dwTab) { opts.windowId = dwTab.windowId; opts.index = dwTab.index + 1; }
-    const created = await chrome.tabs.create(opts).catch(() => null);
+    let created = null;
+    try { created = await withTimeout(chrome.tabs.create(opts), 10000, 'tab_open_failed'); }
+    catch (e) { created = null; }
     if (!created) return { ok: false, code: 'tab_open_failed' };
     tabId = created.id; how = 'opened';
     await waitTabComplete(tabId, 30000);
@@ -182,7 +190,7 @@ async function pairTab(tabId) {
   S.userUnpaired = false;
   S.pair = { tabId, windowId: tab.windowId, siteId, host, title: (tab.title || host).slice(0, 80), pairedAt: Date.now() };
   await persist();
-  await ensureGptInjected(tabId);
+  await ensureGptInjected(tabId); // if this fails, dispatch will report chat_tab_unreachable
   await setPairBadge(tabId, true);
   await broadcast();
   return { ok: true, pair: S.pair };
@@ -196,9 +204,16 @@ async function unpair() {
   return { ok: true };
 }
 async function ensureGptInjected(tabId) {
-  const alive = await chrome.tabs.sendMessage(tabId, { type: 'gpt:ping' }).catch(() => null);
-  if (alive && alive.ok) return;
-  await chrome.scripting.executeScript({ target: { tabId }, files: GPT_FILES });
+  try {
+    const alive = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'gpt:ping' }).catch(() => null), 4000, 'ping_timeout');
+    if (alive && alive.ok) return { ok: true };
+  } catch (e) { /* ping timed out or failed; try injecting */ }
+  try {
+    await withTimeout(chrome.scripting.executeScript({ target: { tabId }, files: GPT_FILES }), 8000, 'inject_timeout');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, code: 'chat_tab_unreachable' };
+  }
 }
 
 // ---------- pass ----------
@@ -249,7 +264,11 @@ async function handleSubmit(sender, msg) {
   const providerId = j.provider || S.provider;
   if (j.provider && j.provider !== S.provider) { S.provider = j.provider; await loc.set({ provider: j.provider }); }
   if (!S.pair && S.userUnpaired && !j.provider) return { ok: false, code: 'not_paired', provider: providerId };
+  const myGen = S.stopGen;
+  // Tell the editor immediately, before any tab wait, so the feed does not sit on "Collecting page files".
+  await tell(tabId, { type: 'sw:event', event: { kind: 'step', step: 'open_tab', ok: true, detail: { provider: providerId } } });
   const pt = await ensureProviderTab(providerId, tabId);
+  if (S.stopGen !== myGen) return { ok: false, code: 'stopped', provider: providerId };
   if (!pt.ok) return { ok: false, code: pt.code || 'not_paired', provider: providerId };
   if (typeof j.prompt !== 'string' || !j.prompt || j.prompt.length > 20000) return { ok: false, code: 'bad_job' };
   if (j.file && (typeof j.file.dataUrl !== 'string' || j.file.dataUrl.length > 25 * 1024 * 1024)) return { ok: false, code: 'bad_job' };
@@ -267,7 +286,9 @@ async function handleSubmit(sender, msg) {
   payloads[id] = { prompt: j.prompt, file: j.file || null, files: pageFiles };
   await persist();
   await broadcast();
+  if (S.stopGen !== myGen) { await finishJob(id); return { ok: false, code: 'stopped', provider: providerId }; }
   const r = await dispatch(id, false);
+  if (S.stopGen !== myGen) return { ok: false, code: 'stopped', provider: providerId };
   if (!r.ok) return r;
   return { ok: true, jobId: id, provider: providerId, tab: pt.how };
 }
@@ -279,8 +300,9 @@ async function dispatch(jobId, forceBundled) {
   job.instrSource = inst.source; job.instrVersion = inst.instr.version;
   await persist();
   try {
-    await ensureGptInjected(job.gptTabId);
-    const r = await chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:run', jobId, instr: inst.instr, job: payloads[jobId] });
+    const inj = await ensureGptInjected(job.gptTabId);
+    if (!inj || !inj.ok) throw new Error('inject_failed');
+    const r = await withTimeout(chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:run', jobId, instr: inst.instr, job: payloads[jobId] }), 8000, 'no_ack');
     if (!r || !r.ok) throw new Error('no ack');
   } catch (e) {
     await report(job.siteId, 'tab', 'chat_tab_unreachable', inst.instr.version);
@@ -335,8 +357,15 @@ async function control(sender, msg) {
   const job = S.activeJobId && S.jobs[S.activeJobId];
   switch (msg.action) {
     case 'stop':
-      if (!job) return { ok: false, code: 'no_job' };
-      await chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:control', jobId: job.id, action: 'stop' }).catch(() => null);
+      S.stopGen++;
+      if (job) {
+        await chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:control', jobId: job.id, action: 'stop' }).catch(() => null);
+        await chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:control', jobId: job.id, action: 'abort' }).catch(() => null);
+        await tell(job.dwTabId, { type: 'sw:event', jobId: job.id, event: { kind: 'done', status: 'stopped', text: '', files: [] } });
+        await finishJob(job.id);
+      } else if (tabId != null) {
+        await tell(tabId, { type: 'sw:event', event: { kind: 'done', status: 'stopped', text: '', files: [] } });
+      }
       return { ok: true };
     case 'pause':
       S.paused = true; await persist();

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.6.1 — 2026-11-24
+
+- Provider-named labels now follow the selected AI. With Gemini selected, the relay title is "Sending to Gemini…", steps say "Opening Gemini" and "Gemini is reading…", and errors say "Gemini". The same applies to ChatGPT.
+- The editor reads the AI picker (or the provider on `dw-ext-submit`) when it paints those labels and when it sends the job, so a stale saved pref can no longer leave the title on ChatGPT while Gemini is selected.
+- The editor-ai install page Step 3 now says "ChatGPT or Gemini writes the answer".
+- After Send, the feed no longer hangs on "Collecting page files": the extension reports "Opening Gemini" (or ChatGPT) right away, and if nothing starts within 25 seconds the editor shows a clear error instead of spinning.
+- Stop works at every stage, including before the AI tab is reached: it aborts pending work and shows "Stopped. Nothing changed."
+- Timeouts on opening or injecting the AI tab, and on the editor pass request, so a stuck handshake is reported instead of hanging.
+
+
 ## v0.1.6 — 2026-11-24
 
 - **Gemini** as a second AI. A picker (ChatGPT / Gemini) in the editor note box and in the extension popup; the choice is remembered. A gemini.google.com tab can be paired from the popup like a ChatGPT tab.

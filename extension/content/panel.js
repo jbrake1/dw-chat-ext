@@ -52,7 +52,7 @@
     var wrap = el(doc, 'div', { class: 'wrap', role: 'region', 'aria-label': 'AI relay' });
     var hd = el(doc, 'div', { class: 'hd' });
     var dot = el(doc, 'span', { class: 'dot', 'data-role': 'dot' });
-    var title = el(doc, 'span', { class: 'title', 'data-role': 'title' }, 'ChatGPT relay');
+    var title = el(doc, 'span', { class: 'title', 'data-role': 'title' }, 'AI relay');
     var spin = el(doc, 'span', { class: 'spin off', 'data-role': 'spin', 'aria-hidden': 'true' });
     // v0.1.6: which AI gets the request (remembered by the extension).
     var pick = el(doc, 'select', { 'data-role': 'provider', 'aria-label': 'AI', title: 'Which AI gets your request' });
@@ -65,7 +65,7 @@
     var opt = el(doc, 'label', { class: 'opt' });
     var chk = el(doc, 'input', { type: 'checkbox', 'data-role': 'relay-toggle' });
     chk.checked = true;
-    opt.appendChild(chk); var optText = el(doc, 'span', { 'data-role': 'relay-text' }, 'Also send my request to ChatGPT when I press Send');
+    opt.appendChild(chk); var optText = el(doc, 'span', { 'data-role': 'relay-text' }, 'Also send my request to the AI when I press Send');
     opt.appendChild(optText);
     var scroll = el(doc, 'div', { class: 'scroll', 'data-role': 'scroll', role: 'log', 'aria-live': 'polite' });
     var body = el(doc, 'div', { 'data-role': 'body' });
@@ -133,7 +133,11 @@
       pick.disabled = !!s.busy;
       optText.textContent = 'Also send my request to ' + name + ' when I press Send';
       var pairedHere = s.paired && (!s.site || s.site === want);
-      title.textContent = !s.active ? name + ' relay (waiting for editor pass)' : pairedHere ? 'Paired with ' + name : !s.paired ? name + ' relay: no tab paired' : name + ' relay';
+      title.textContent = s.busy ? 'Sending to ' + name + '\u2026'
+        : !s.active ? name + ' relay (waiting for editor pass)'
+        : pairedHere ? 'Paired with ' + name
+        : !s.paired ? name + ' relay: no tab paired'
+        : name + ' relay';
       bStop.disabled = !s.busy; bPause.disabled = !s.paired; bUnpair.disabled = !s.paired;
       bPause.textContent = s.paused ? 'Resume' : 'Pause';
       chk.disabled = !s.active;
@@ -173,19 +177,20 @@
       note: function (text) { scroll.appendChild(el(doc, 'div', { class: 'note', 'data-role': 'note' }, text)); autoscroll(); },
       step: function (name, ok, detail, pageFiles) {
         ensureReply();
-        var labels = { instructions: 'Getting ready', prompt: 'Opening ChatGPT', text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: 'ChatGPT is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
+        var nameAi = L(state.provider || 'chatgpt');
+        var labels = { instructions: 'Getting ready', open_tab: 'Opening ' + nameAi, newChat: 'New chat', prompt: 'Opening ' + nameAi, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: nameAi + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions' };
         var label = labels[name] || name;
         if ((name === 'send' || name === 'attach') && ok) {
           var haveShot = logEl.querySelector('[data-step=send],[data-step=attach]');
           logEl.appendChild(el(doc, 'div', { class: haveShot ? 'step hide' : 'step', 'data-step': name, 'data-ok': '1' }, (pageFiles > 0 ? '\u2713 Uploaded screenshot + ' + pageFiles + (pageFiles === 1 ? ' file' : ' files') : '\u2713 Screenshot sent') + (detail ? ' ' + detail : '')));
-          if (!logEl.querySelector('[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, 'ChatGPT is reading\u2026'));
+          if (!logEl.querySelector('[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, nameAi + ' is reading\u2026'));
           spin.classList.remove('off');
           autoscroll();
           return;
         }
         if (name === 'stream') {
           spin.classList.remove('off');
-          if (!logEl.querySelector('[data-step=stream],[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, 'ChatGPT is reading\u2026'));
+          if (!logEl.querySelector('[data-step=stream],[data-role=reading]')) logEl.appendChild(el(doc, 'div', { class: 'step', 'data-step': 'stream', 'data-ok': '0', 'data-role': 'reading' }, nameAi + ' is reading\u2026'));
           else if (!logEl.querySelector('[data-step=stream]')) logEl.appendChild(el(doc, 'div', { class: 'step hide', 'data-step': 'stream', 'data-ok': '1', 'aria-hidden': 'true' }, ''));
           autoscroll();
           return;
@@ -196,7 +201,7 @@
       setReply: function (text, files) {
         ensureReply();
         var reading = logEl && logEl.querySelector('[data-role=reading]');
-        if (reading) { reading.setAttribute('data-ok', '1'); reading.textContent = '\u2713 ChatGPT is reading\u2026'; }
+        if (reading) { reading.setAttribute('data-ok', '1'); reading.textContent = '\u2713 ' + L(state.provider || 'chatgpt') + ' is reading\u2026'; }
         spin.classList.remove('off');
         if (window.DWX && typeof DWX.renderMd === 'function') DWX.renderMd(doc, text, replyEl);
         else replyEl.textContent = text;
@@ -208,7 +213,7 @@
           } else if (f.kind === 'link' && /^https:/i.test(f.url)) {
             filesEl.appendChild(el(doc, 'a', { href: f.url, target: '_blank', rel: 'noopener noreferrer', 'data-kind': 'link' }, '\u2197 ' + f.name));
           } else {
-            var b = el(doc, 'button', { type: 'button', 'data-kind': f.kind, 'data-id': f.id }, '\u2B07 ' + f.name + ' (open in ChatGPT tab)');
+            var b = el(doc, 'button', { type: 'button', 'data-kind': f.kind, 'data-id': f.id }, '\u2B07 ' + f.name + ' (open in ' + L(state.provider || 'chatgpt') + ' tab)');
             b.addEventListener('click', function () { h.onOpenFile(f.id); });
             filesEl.appendChild(b);
           }

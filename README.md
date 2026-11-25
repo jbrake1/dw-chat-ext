@@ -8,6 +8,8 @@ ChatGPT is the first chat site and Chrome is the first browser. Adding another c
 
 > **Status.** The relay, controls, remote-update flow, pass checks and test harness are verified end to end against a **mock** ChatGPT page and mock DW site. The **live chatgpt.com selectors in `chatgpt.json` were verified on 2026-11-22 (revision 2) against the real signed-in site** (see [What is and is not verified](#what-is-and-is-not-verified)); file and image extraction from replies is the known gap.
 
+> **v0.1.6.1.** Relay labels (title, steps, errors) now say Gemini when Gemini is selected.
+
 > **Gemini (v0.1.6).** Pick **ChatGPT** or **Gemini** in the editor (or the extension popup). On Send, the paired tab of that AI is used, else an open one is reused, else a new one opens in the background at gemini.google.com/app; the relay always starts a **New chat**, uploads through Gemini's "+" menu (never the OS file chooser), and never touches the model picker, Upgrade or Get app. The Gemini selectors (`instructions/gemini.json`, `verified: false`) were built from public knowledge of Gemini's page and saved fixtures; they have **not yet been checked against a live signed-in Gemini page**.
 
 ## How it works
@@ -53,7 +55,7 @@ See [API.md](API.md) for the three site endpoints and the optional page-message 
 
 A standalone copy of these steps is in [INSTALL.md](INSTALL.md). Chrome is the supported browser (version 120 or later). The extension is not in the Chrome Web Store yet, so you load the zip yourself.
 
-**Download:** [dw-chat-ext-v0.1.6.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.6.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.6 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.6). Optional check: the zip’s md5 is `c0fb0e4fce329988f08229013e163183`. Versions 0.1.5, 0.1.4, 0.1.3, 0.1.2, 0.1.1 and 0.1.0 remain available on the install page.
+**Download:** [dw-chat-ext-v0.1.6.1.zip](https://dwalliance.com/editor-ai/dw-chat-ext-v0.1.6.1.zip) from the [AI/SI Editor](https://dwalliance.com/editor-ai/index.html) page, or from the [v0.1.6.1 GitHub release](https://github.com/jbrake1/dw-chat-ext/releases/tag/v0.1.6.1). Optional check: the zip’s md5 is `4e10799b726072af4691c10c1dbbde24`. Versions 0.1.6, 0.1.5, 0.1.4, 0.1.3, 0.1.2, 0.1.1 and 0.1.0 remain available on the install page.
 
 ### Load it in Chrome
 
