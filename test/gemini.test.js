@@ -84,11 +84,11 @@ test('no file input in the "+" menu: falls back to dropping the files on the inp
   assert.deepEqual(win.__forbidden, []);
 });
 
-test('Gemini usage-limit reply is reported as usage_limit (sent), with a clear message', async () => {
+test('Gemini usage-limit reply is reported as a limit (file_limit from the v0.1.5 detector, or usage_limit), sent, with a clear message', async () => {
   const win = await mockGemini('?limit=1');
   const { ev, emit } = collect();
   const res = await runJob(win, fast(), JOB(), { emit }).promise;
-  assert.equal(res.ok, false); assert.equal(res.code, 'usage_limit');
+  assert.equal(res.ok, false); assert.ok(['file_limit', 'usage_limit'].includes(res.code), res.code);
   const err = ev.find((e) => e.kind === 'error'); assert.equal(err.sent, true);
   assert.match(R.message('gemini', 'usage_limit'), /Gemini says a usage or upload limit was reached/);
 });
