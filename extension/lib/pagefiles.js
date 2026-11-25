@@ -140,14 +140,14 @@
       var meta = ' (' + f.type + ', ' + kb(f.size) + ')';
       if (!f.attached) lines.push('- ' + f.name + ': current source of ' + f.path + meta);
       else if (f.path) lines.push('- ' + f.name + ': a file I am adding, to be put on the site at ' + f.path + meta);
-      else lines.push('- ' + f.name + ': a file I uploaded for you to look at, not for the site' + meta);
+      else lines.push('- ' + f.name + ': a file I uploaded for you to look at, not for the site' + meta + (/^image\/(png|jpeg|gif|webp)$/.test(f.type) ? '. If I ask you to use this picture on a page, link it as assets/img/' + f.name + ' exactly (the editor saves my original file there); do not invent another file name.' : ''));
     });
     if (skipped && skipped.length) {
       lines.push('Not attached:');
       skipped.forEach(function (s) { lines.push('- ' + s.path + ' (' + (WHY[s.reason] || s.reason) + ')'); });
     }
     if (page.length) {
-      lines.push('', 'The files marked "current source of" are the exact current files on the site. Edit them, not a copy of the rendered page. For every file that must change, return the COMPLETE updated file (not a diff or a fragment) in its own code block in your reply (a download link alone is not enough), with a line just above the block that gives its path, for example "File: ' + page[0].path + '". Keep the same file names and paths. Do not return files that do not change.');
+      lines.push('', 'The files marked "current source of" are the exact current files on the site. Edit them, not a copy of the rendered page. For every file that must change, return the COMPLETE updated file (not a diff or a fragment) in its own code block in your reply (a download link alone is not enough), with a line just above the block that gives its path, for example "File: ' + page[0].path + '". Keep the same file names and paths. Do not return files that do not change. If the page needs a NEW picture or file that you make yourself (for example a resized copy), name the downloadable file exactly like the last part of the path the page links to (for /assets/img/beach-1600.webp the file must be beach-1600.webp) and write that full path in your reply.');
     }
     var dest = mine.filter(function (f) { return f.path; });
     if (dest.length) {

@@ -74,9 +74,14 @@ test('runner: a notice left on the page from before this send is not blamed on a
   const res = await runJob(win, fast(bundled()), job(true), { emit: (e) => ev.push(e) }).promise;
   assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
 });
-test('wiring: the limit event reaches the page as a plain-text error; nothing on ChatGPT is clicked for it', () => {
+test('wiring: the limit event reaches the editor as a plain-text error, and the editor offers a text + screenshot retry', () => {
   const dw = fs.readFileSync(path.join(__dirname, '../extension/content/dw.js'), 'utf8');
-  assert.match(dw, /DWX\.providers\.label\(pidE\) \+ '\\u2019s file limit was reached\. Try again ' \+ when\.phrase \+ ', or send without page files\./);   // v0.1.6: ChatGPT or Gemini
+  assert.match(dw, /DWX\.providers\.label\(pidE\) \+ '\\u2019s file limit was reached\. Try again ' \+ when\.phrase \+ ', or send without page files\./);   // v0.1.6: "ChatGPT's" or "Gemini's"
   assert.match(dw, /toPage\('dw-ext-error', when \? \{ jobId: msg\.jobId, code: e\.code, step: e\.step, retryAfter: when\.time, retryDay: when\.day/);
+  const mk = fs.readFileSync((fs.existsSync(path.join(__dirname, '../server/markup/markup.js')) ? path.join(__dirname, '../server/markup/markup.js') : path.join(__dirname, '../mock/markup.js')), 'utf8');
+  assert.match(mk, /xtAiName\(XT\.ai\) \+ '\\u2019s file limit was reached\. Try again ' \+ xtLimitWhen\(d\) \+ \(hadFiles \? ', or send without page files\.' : '\.'\)/);   // v0.1.6: ChatGPT or Gemini
+  assert.match(mk, /label: 'Send without page files'/);
+  assert.match(mk, /xtPost\('dw-ext-submit', \{ id: l\.id, screenshot: l\.screenshot, note: l\.note, pageUrl: l\.pageUrl, element: l\.element, provider: XT\.ai \}\)/);   // no files key; same AI as before
+  assert.doesNotMatch(mk, /Try Plus|Start a free Plus|upgrade/i);
   assert.doesNotMatch(dw + fs.readFileSync(path.join(__dirname, '../extension/lib/runner.js'), 'utf8'), /Try Plus|Start a free Plus|upgrade/i);
 });

@@ -25,7 +25,7 @@ function fast() {
 const collect = () => { const ev = []; return { ev, emit: (e) => ev.push(e) }; };
 const snap = (n) => load(path.join(root, 'harness/snapshots', `gemini-fixture-${n}.html`));
 
-test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.10, rev 3 with the hooked chooser, the inline fallback and markdown reply text', () => {
+test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.12, rev 4 with the hooked chooser, the inline fallback and markdown reply text', () => {
   const i = geminiInstr();
   const ajv = new Ajv({ allErrors: true, strict: false });
   assert.equal(ajv.validate(schema(), i), true, JSON.stringify(ajv.errors));
@@ -33,7 +33,7 @@ test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, un
   const body = Object.assign({}, i); delete body.integrity;
   assert.equal(crypto.createHash('sha256').update(canonical(body)).digest('hex'), i.integrity.hash, 'run npm run seal');
   assert.equal(i.verified, false, 'live Gemini selectors are not verified yet');
-  assert.equal(i.minExtVersion, '0.1.10'); assert.ok(i.revision >= 3); assert.equal(i.steps.blocks.markdownText, true);
+  assert.equal(i.minExtVersion, '0.1.12'); assert.ok(i.revision >= 4); assert.ok(i.steps.files.generated && i.steps.files.generated.useHook === true); assert.equal(i.steps.blocks.markdownText, true);
   assert.deepEqual(i.steps.attach.strategies.map((s) => s.type), ['fileInput', 'hookedChooser', 'drop', 'paste']);
   assert.ok(i.steps.attach.inlineFallback.maxBytes > 0);
   assert.ok(i.steps.attach.strategies.every((s) => !s.confirmMs || s.confirmMs <= 12000), 'each attempt is bounded');

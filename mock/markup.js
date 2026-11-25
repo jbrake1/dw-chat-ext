@@ -32,6 +32,49 @@
   }
   function xtAiName(id) { return XT_AI[id || ''] || XT_AI[xtAiPref()] || 'the AI'; }
   function xtAiUse() { XT.ai = xtAiPref(); return XT.ai; }
+  // ----- v0.1.12: the "finished" chime. Soft WebAudio notes (no sound file): three rising notes when the reply is in and its
+  // files are staged, two when it finished with no files, a lower falling pair on a problem. The mute switch is remembered. -----
+  var XT_MUTE_KEY = 'dw_ext_mute', XT_CTX = null;
+  var XT_TUNES = {
+    ok: [[523.25, 0, 0.7, 0.10], [659.25, 0.17, 0.7, 0.10], [783.99, 0.34, 1.0, 0.10]],
+    done: [[659.25, 0, 0.6, 0.08], [783.99, 0.18, 0.8, 0.08]],
+    error: [[392.0, 0, 0.7, 0.09], [311.13, 0.24, 1.0, 0.09]]
+  };
+  function xtMuted() { try { return localStorage.getItem(XT_MUTE_KEY) === '1'; } catch (e) { return false; } }
+  function xtSetMuted(on) { try { if (on) localStorage.setItem(XT_MUTE_KEY, '1'); else localStorage.removeItem(XT_MUTE_KEY); } catch (e) {} }
+  function xtCtx() {
+    if (XT_CTX) return XT_CTX;
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    try { XT_CTX = new C(); } catch (e) { XT_CTX = null; }
+    return XT_CTX;
+  }
+  // Called inside a click (Send, Send follow-up, the mute button) so the browser allows the sound that comes later.
+  function xtChimeUnlock() {
+    var c = xtCtx();
+    try { if (c && c.state === 'suspended' && c.resume) { var p = c.resume(); if (p && p.catch) p.catch(function () {}); } } catch (e) {}
+  }
+  function xtChime(kind) {
+    var tune = XT_TUNES[kind], muted = xtMuted();
+    try { if (XT.feed) XT.feed.setAttribute('data-chime', muted ? 'muted' : kind); } catch (e) {}
+    xtLog('chime', { kind: kind, muted: muted });
+    if (!tune || muted) return false;
+    var c = xtCtx(); if (!c) return false;
+    try {
+      if (c.state === 'suspended' && c.resume) { var p = c.resume(); if (p && p.catch) p.catch(function () {}); }
+      var t0 = c.currentTime + 0.03;
+      tune.forEach(function (n) {
+        var o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.setValueAtTime(n[0], t0 + n[1]);
+        g.gain.setValueAtTime(0.0001, t0 + n[1]);
+        g.gain.linearRampToValueAtTime(n[3], t0 + n[1] + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + n[1] + n[2]);
+        o.connect(g); g.connect(c.destination);
+        o.start(t0 + n[1]); o.stop(t0 + n[1] + n[2] + 0.05);
+      });
+      return true;
+    } catch (e) { return false; }
+  }
   var XT_VER = /^[0-9A-Za-z._-]{1,32}$/;
   function xtPost(type, extra) { var m = { source: 'dw-edit', type: type, v: 1 }; for (var k in (extra || {})) m[k] = extra[k]; window.postMessage(m, location.origin); }
   function xtHello() { xtPost('dw-ext-hello', { panel: true, wantEvents: true }); }
@@ -101,6 +144,7 @@
     if (st && !st.editor) XT.active = false;
     XT.paired = !!(st && st.paired);
     xtPaintStatus();
+    if (XT.feed && XT.job === null) { var fs = XT.feed.getAttribute('data-state'); xtFollowShow(!!XT.active && (fs === 'done' || fs === 'stopped' || fs === 'error')); }   // the follow-up box follows the extension's state
   }
   function xtStartDetect() {
     if (XT.timer) clearTimeout(XT.timer);
@@ -159,9 +203,27 @@
     return (Array.isArray(sent) ? sent : []).map(function (f) {
       var row = { path: f.path, name: f.name, base: f.base || xtBase(f.path || f.name || ''), kind: f.kind, page: !!f.page };
       if (f.attach) row.attach = true;
+      if (f.loose) row.loose = true;
       if (typeof f.text === 'string' && f.text.length <= 200000) row.text = f.text;
       return row;
     });
+  }
+  // v0.1.12: the pictures attached with no path, kept for this tab (sessionStorage) so a refresh does not lose them.
+  function xtLooseKey() { return 'dw_ext_loose:' + xtPagePath(); }
+  function xtLooseSave(sent) {
+    try {
+      var keep = (sent || []).filter(function (s) { return s.loose && s.dataUrl; }).map(function (s) { return { name: s.name, dataUrl: s.dataUrl }; });
+      var size = keep.reduce(function (n, k) { return n + k.dataUrl.length; }, 0);
+      if (!keep.length || size > 3500000) sessionStorage.removeItem(xtLooseKey()); else sessionStorage.setItem(xtLooseKey(), JSON.stringify(keep));
+    } catch (e) { try { sessionStorage.removeItem(xtLooseKey()); } catch (e2) {} }
+  }
+  function xtLooseHydrate(sent) {
+    try {
+      var keep = JSON.parse(sessionStorage.getItem(xtLooseKey()) || 'null');
+      if (!Array.isArray(keep) || !Array.isArray(sent)) return sent;
+      sent.forEach(function (s) { if (s.loose && !s.dataUrl) { var k = keep.filter(function (x) { return x && x.name === s.name; })[0]; if (k && typeof k.dataUrl === 'string') s.dataUrl = k.dataUrl; } });
+    } catch (e) {}
+    return sent;
   }
   function xtFeedStepsSnap() {
     var steps = [];
@@ -187,12 +249,13 @@
       state: v.state || '', text: String(v.text || ''), files: Array.isArray(v.files) ? v.files.slice(0, 20) : [],
       blocks: Array.isArray(v.blocks) ? v.blocks.slice(0, 12) : [], status: v.status || '',
       error: v.error ? { code: String(v.error.code || '').slice(0, 80), step: String(v.error.step || '').slice(0, 40) } : null,
-      sent: xtSentLite(v.sent || XT.sent)
+      sent: xtSentLite(v.sent || XT.sent),
+      history: Array.isArray(v.history) ? v.history.slice(-6).map(function (h) { return { note: String(h && h.note || '').slice(0, 2000), text: String(h && h.text || '').slice(0, 60000) }; }) : []
     };
     try { sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
     catch (e) {
       try { o.sent = (o.sent || []).map(function (f) { return { path: f.path, name: f.name, base: f.base, kind: f.kind, page: !!f.page, attach: !!f.attach }; }); sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
-      catch (e2) { try { delete o.files; sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); } catch (e3) {} }
+      catch (e2) { try { delete o.files; o.history = (o.history || []).slice(-2); sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); } catch (e3) {} }
     }
   }
   function xtFeedPersist(extra) {
@@ -220,6 +283,10 @@
     setTimeout(function () { if (!XT.feed || !XT.feed.querySelector('[data-role=feed-user],[data-role=reply]')) xtRestoreRelayNote(); }, 2500);
   }
   function xtRestoreFeed(fromExt) {
+    XT.restoring = true;                                                        // a restore after a refresh is silent (no chime)
+    try { return xtRestoreFeed0(fromExt); } finally { XT.restoring = false; }
+  }
+  function xtRestoreFeed0(fromExt) {
     var v = fromExt && (fromExt.text || fromExt.note || (fromExt.blocks && fromExt.blocks.length) || fromExt.status) ? fromExt : xtFeedRecordGet();
     if (!v) return false;
     if (v.path && v.path !== xtPagePath()) return false;
@@ -228,15 +295,17 @@
     var haveLen = (XT.feedReply && XT.feedReply.getAttribute('data-plain') || '').length;
     if (haveDone && !(incoming && incoming > haveLen)) {
       if (fromExt && fromExt.status === 'complete' && !xtStagedGet() && (fromExt.blocks || fromExt.text)) {
-        if (v.sent && v.sent.length) XT.sent = v.sent;
-        xtDone({ status: 'complete', text: fromExt.text, files: fromExt.files, blocks: fromExt.blocks });
+        if (v.sent && v.sent.length) XT.sent = xtLooseHydrate(v.sent);
+        xtDone({ status: 'complete', text: fromExt.text, files: fromExt.files, blocks: fromExt.blocks }, true);
       }
       return true;
     }
     if (v.ai && XT_AI[v.ai]) XT.ai = v.ai;
-    if (v.sent && v.sent.length) XT.sent = v.sent;
+    if (v.sent && v.sent.length) XT.sent = xtLooseHydrate(v.sent);
     if (v.jobId && (v.status === 'streaming' || v.status === 'sending' || v.state === 'streaming' || v.state === 'sending' || v.running)) XT.job = v.jobId;
-    xtFeedUser(v.note || '(no note)', null);
+    var st0 = xtFeedRecordGet();
+    var hist = (v.history && v.history.length) ? v.history : ((st0 && st0.history && st0.history.length && (!v.note || st0.note === v.note)) ? st0.history : []);
+    xtFeedUser(v.note || '(no note)', null, hist);
     (v.steps || []).forEach(function (s) { if (s && (s.name || s.label)) xtFeedAddStep(s.name || 'step', !!s.ok, s.label || xtFeedLabel(s.name || '')); });
     var text = v.text || '', files = v.files || [], blocks = v.blocks || [], status = v.status || '';
     if (text || (blocks && blocks.length)) {
@@ -244,9 +313,9 @@
       else xtFeedChunk(text, files);
     }
     if (v.error && v.error.code) xtFeedError(v.error.code, v.error.step, v.error);
-    XT.feedRec = { note: v.note, text: text, files: files, blocks: blocks, status: status, state: v.state, ai: XT.ai, jobId: v.jobId, sent: XT.sent };
+    XT.feedRec = { note: v.note, text: text, files: files, blocks: blocks, status: status, state: v.state, ai: XT.ai, jobId: v.jobId, sent: XT.sent, history: hist };
     xtFeedRecordSet(XT.feedRec);
-    if ((status === 'complete' || v.state === 'done') && !xtStagedGet()) xtDone({ status: 'complete', text: text, files: files, blocks: blocks });
+    if ((status === 'complete' || v.state === 'done') && !xtStagedGet()) xtDone({ status: 'complete', text: text, files: files, blocks: blocks }, true);
     xtLog('feed_restored', { state: v.state || status, hasText: !!text, from: fromExt ? 'ext' : 'store' });
     return true;
   }
@@ -356,6 +425,7 @@
     xtLog('submit_start', { active: !!XT.active, ai: XT.ai || xtAiPref() });
     if (!XT.active) { xtNoRelay(note, blob); return; }                          // v0.1.7: never fail silently
     XT.aborted = false;
+    xtChimeUnlock();
     xtAiUse();                                                                   // set before the feed title is painted
     var withFiles = ui.filesChk ? !!ui.filesChk.checked : xtFilesOn();
     var imgs = withFiles ? xtImageCandidates(note) : [];
@@ -451,18 +521,19 @@
     if (XT_MIME[xtExt(base)] !== XT_MIME[xtExt(name)]) return { err: 'the path must end in the same type as the file (.' + xtExt(name) + ')' };
     return { path: p };
   }
-  function xtAttAddOne(f) {
+  function xtAttAddOne(f, list) {
+    list = list || XT_ATT;                                                      // v0.1.12: the follow-up box has its own list
     var name = xtAttName(f.name), ext = xtExt(name);
     if (!name || !XT_MIME[ext]) return 'is not a supported type (html, css, js, json, svg, png, jpg, gif, webp, pdf, txt)';
     if (!f.size) return 'is empty';
     if (f.size > XT_LIM.file) return 'is over ' + Math.round(XT_LIM.file / 1024 / 1024) + ' MB';
-    if (XT_ATT.length >= XT_LIM.files) return 'is over the limit of ' + XT_LIM.files + ' files';
-    var total = XT_ATT.reduce(function (n, a) { return n + a.size; }, 0);
+    if (list.length >= XT_LIM.files) return 'is over the limit of ' + XT_LIM.files + ' files';
+    var total = list.reduce(function (n, a) { return n + a.size; }, 0);
     if (total + f.size > XT_LIM.total) return 'would pass the ' + Math.round(XT_LIM.total / 1024 / 1024) + ' MB total';
-    var used = {}; XT_ATT.forEach(function (a) { used[a.name] = 1; });
+    var used = {}; list.forEach(function (a) { used[a.name] = 1; });
     var nm = name, k = 2, dot = name.lastIndexOf('.');
     while (used[nm]) nm = name.slice(0, dot) + '-' + (k++) + name.slice(dot);
-    XT_ATT.push({ id: ++XT_ATT_SEQ, file: f, name: nm, ext: ext, size: f.size, path: '', err: '' });
+    list.push({ id: ++XT_ATT_SEQ, file: f, name: nm, ext: ext, size: f.size, path: '', err: '' });
     return '';
   }
   function xtAttAdd(list) {
@@ -512,8 +583,8 @@
     xtAttAdd(e.dataTransfer.files);
   }
   // The attached files for dw-ext-submit (attached:true, path '' = shown to the AI only). Clears the list.
-  function xtAttTake() {
-    var list = XT_ATT.slice(); XT_ATT = [];
+  function xtAttTake(only) {
+    var list = only || XT_ATT.slice(); if (!only) XT_ATT = [];
     return Promise.all(list.map(function (a) {
       var mime = XT_MIME[a.ext], path = xtAttPath(a.path, a.name).path || '';
       return xtToDataUrl(a.file).then(function (d) {
@@ -573,7 +644,7 @@
   // Persistent in-editor transcript (survives stop() after Send). Screenshot thumbs use a page-local object URL only.
   function xtFeedLabel(name) {
     var N = xtAiName(XT.ai);
-    return ({ instructions: 'Getting ready', open_tab: 'Opening ' + N, newChat: 'New chat', prompt: 'Opening ' + N, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: N + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions', attach_inline: N + ' did not take the upload, so the files went in the message as text (no screenshot)' })[name] || name;
+    return ({ instructions: 'Getting ready', open_tab: 'Opening ' + N, newChat: 'New chat', followUp: 'Same chat kept', prompt: 'Opening ' + N, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: N + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions', attach_inline: N + ' did not take the upload, so the files went in the message as text (no screenshot)' })[name] || name;
   }
   var FEED_CSS = [
     ':host{all:initial}',
@@ -605,7 +676,14 @@
     '.foot{display:flex;gap:6px;flex-wrap:wrap;padding:8px 9px;border-top:1px solid #2d3138}',
     '.foot button{border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;background:#2a2f36;color:#e8eaed}',
     '.foot button.go{background:#2563eb;color:#fff;font-weight:600}',
-    '.foot a{color:#93c5fd;font-size:12px;align-self:center}'
+    '.foot a{color:#93c5fd;font-size:12px;align-self:center}',
+    '.fu{display:flex;flex-direction:column;gap:6px;padding:8px 9px;border-top:1px solid #2d3138;background:#181a1e}',
+    '.fu textarea{width:100%;min-height:44px;max-height:120px;resize:vertical;border:1px solid #333844;border-radius:6px;background:#111318;color:#e8eaed;padding:6px 7px;font:12px/1.4 ui-sans-serif,system-ui,sans-serif}',
+    '.fu .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.fu .row button{border:0;border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer;background:#2a2f36;color:#e8eaed}',
+    '.fu .row button.go{background:#2563eb;color:#fff;font-weight:600;margin-left:auto}.fu .chk{font-size:11px;color:#9aa3ad;display:flex;align-items:center;gap:3px}',
+    '.fu .names{display:flex;flex-wrap:wrap;gap:4px;font-size:11px;color:#9aa3ad}.fu .names span{background:#252830;border:1px solid #333844;border-radius:10px;padding:1px 7px}.fu .names button{border:0;background:none;color:#9aa3ad;cursor:pointer;padding:0 0 0 4px}',
+    '.fu .fumsg{font-size:11px;color:#f87171}',
+    '.me.old{opacity:.85}.reply.old{opacity:.85}'
   ].join('\n');
 
   function xtMdInline(doc, parent, s) {
@@ -683,6 +761,10 @@
     XT.feedPause = el('button', { type: 'button', 'data-act': 'pause' }, 'Pause');
     XT.feedStop = el('button', { type: 'button', 'data-act': 'stop' }, 'Stop');
     XT.feedClose = el('button', { type: 'button', 'data-act': 'close', 'aria-label': 'Close' }, '\u2715');
+    XT.feedMute = el('button', { type: 'button', 'data-act': 'mute', title: 'Chime when the AI finishes: on / off' }, '');
+    function paintMute() { var m = xtMuted(); XT.feedMute.textContent = m ? '\uD83D\uDD07' : '\uD83D\uDD14'; XT.feedMute.setAttribute('aria-pressed', m ? 'true' : 'false'); XT.feedMute.setAttribute('aria-label', m ? 'Chime is off. Turn on' : 'Chime is on. Turn off'); }
+    paintMute();
+    XT.feedMute.addEventListener('click', function () { var m = !xtMuted(); xtSetMuted(m); paintMute(); if (!m) { xtChimeUnlock(); xtChime('done'); } });
     XT.feedPaused = false;
     XT.feedPause.addEventListener('click', function () {
       var p = !XT.feedPaused;
@@ -693,11 +775,31 @@
     });
     XT.feedStop.addEventListener('click', function () { xtPost('dw-ext-control', { action: 'stop' }); xtFeedStopped(); });
     XT.feedClose.addEventListener('click', function () { xtFeedClose(); });
-    [XT.feedDot, XT.feedTitle, XT.feedSpin, XT.feedPause, XT.feedStop, XT.feedClose].forEach(function (n) { hd.appendChild(n); });
+    [XT.feedDot, XT.feedTitle, XT.feedSpin, XT.feedMute, XT.feedPause, XT.feedStop, XT.feedClose].forEach(function (n) { hd.appendChild(n); });
     XT.feedScroll = el('div', { class: 'scroll', 'data-role': 'feed-scroll', role: 'log', 'aria-live': 'polite' });
     XT.feedFoot = el('div', { class: 'foot', 'data-role': 'feed-foot' });
     XT.feedFoot.style.display = 'none';
     wrap.appendChild(hd); wrap.appendChild(XT.feedScroll); wrap.appendChild(XT.feedFoot);
+    // v0.1.12: the follow-up box. After a reply it sends the next message into the SAME AI chat (no New chat).
+    XT.feedFollow = el('div', { class: 'fu', 'data-role': 'feed-followup' });
+    XT.feedFollow.style.display = 'none';
+    XT.followText = el('textarea', { rows: '2', 'data-role': 'followup-text', placeholder: 'Reply to ' + xtAiName(XT.ai) + ' in the same chat\u2026 (Ctrl+Enter to send)', 'aria-label': 'Follow-up message' });
+    XT.followText.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); xtFollowSend(); } });
+    var fuRow = el('div', { class: 'row' });
+    XT.followAttach = el('button', { type: 'button', 'data-act': 'followup-attach', title: 'Attach pictures or files to this follow-up' }, '\uD83D\uDCCE Attach');
+    XT.followInput = el('input', { type: 'file', multiple: 'multiple', hidden: 'hidden', 'data-role': 'followup-input', accept: '.html,.htm,.css,.js,.mjs,.json,.svg,.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt' });
+    XT.followAttach.addEventListener('click', function () { XT.followInput.click(); });
+    XT.followInput.addEventListener('change', function () { xtFollowAdd(XT.followInput.files); XT.followInput.value = ''; });
+    var fuChk = el('label', { class: 'chk' });
+    XT.followFiles = el('input', { type: 'checkbox', 'data-role': 'followup-pagefiles' });
+    fuChk.appendChild(XT.followFiles); fuChk.appendChild(document.createTextNode(' Send this page\u2019s files again'));
+    XT.followSend = el('button', { type: 'button', class: 'go', 'data-act': 'followup-send' }, 'Send follow-up');
+    XT.followSend.addEventListener('click', function () { xtFollowSend(); });
+    XT.followNames = el('div', { class: 'names', 'data-role': 'followup-names' }, '');
+    XT.followMsg = el('div', { class: 'fumsg', 'data-role': 'followup-msg' }, '');
+    [XT.followAttach, fuChk, XT.followSend].forEach(function (n) { fuRow.appendChild(n); });
+    [XT.followText, XT.followNames, fuRow, XT.followMsg, XT.followInput].forEach(function (n) { XT.feedFollow.appendChild(n); });
+    wrap.appendChild(XT.feedFollow);
     XT.feedRoot.appendChild(wrap);
     XT.feed = wrap;
     document.documentElement.appendChild(XT.feedHost);
@@ -712,7 +814,7 @@
     xtLog('feed_closed');
     if (XT.feedThumbUrl) { try { URL.revokeObjectURL(XT.feedThumbUrl); } catch (e) {} XT.feedThumbUrl = null; }
     if (XT.feedHost && XT.feedHost.parentNode) XT.feedHost.parentNode.removeChild(XT.feedHost);
-    XT.feedHost = XT.feedRoot = XT.feed = XT.feedScroll = XT.feedFoot = XT.feedReply = XT.feedSteps = null;
+    XT.feedHost = XT.feedRoot = XT.feed = XT.feedScroll = XT.feedFoot = XT.feedReply = XT.feedSteps = XT.feedFollow = XT.followText = XT.followInput = null;
   }
   function xtClearWait() { if (XT.waitTimer) { clearTimeout(XT.waitTimer); XT.waitTimer = null; } }
   function xtHeardRelay() { XT.heard = true; xtClearWait(); }
@@ -739,13 +841,15 @@
       XT.feed.setAttribute('data-done', 'stopped');
       XT.feedTitle.textContent = 'Stopped';
     }
+    xtFollowShow(true);
     if (XT.feedScroll && !XT.feedScroll.querySelector('[data-role=feed-stopped]')) {
       XT.feedScroll.appendChild(el('div', { class: 'err', 'data-role': 'feed-stopped' }, 'Stopped. Nothing changed.'));
     }
     xtFeedScroll();
   }
-  function xtFeedUser(note, blob) {
+  function xtFeedUser(note, blob, hist) {
     xtFeedMount();
+    XT.followTurn = false; xtFollowShow(false);
     XT.feed.setAttribute('data-state', 'sending');
     XT.feedTitle.textContent = 'Sending to ' + xtAiName(XT.ai) + '\u2026';
     XT.feedSpin.classList.remove('off');
@@ -753,6 +857,7 @@
     XT.feedReply = null;
     if (XT.feedThumbUrl) { try { URL.revokeObjectURL(XT.feedThumbUrl); } catch (e) {} XT.feedThumbUrl = null; }
     XT.feedScroll.textContent = '';
+    xtFeedHistory(hist);
     var row = el('div', { class: 'me', 'data-role': 'feed-user' });
     if (blob) {
       try {
@@ -761,13 +866,104 @@
       } catch (e) {}
     }
     row.appendChild(el('div', { class: 'txt', 'data-role': 'feed-note' }, note || '(no note)'));
-    XT.feedRec = { note: note || '(no note)', ai: XT.ai, state: 'sending', sent: XT.sent };
+    XT.feedRec = { note: note || '(no note)', ai: XT.ai, state: 'sending', sent: XT.sent, history: hist || [] };
     xtFeedRecordSet(XT.feedRec);
     XT.feedScroll.appendChild(row);
     XT.feedSteps = el('div', { class: 'steps', 'data-role': 'feed-steps' });
     XT.feedScroll.appendChild(XT.feedSteps);
     XT.feedStick = true;
     xtFeedScroll();
+  }
+
+  // ----- v0.1.12: follow-ups. The next message goes into the SAME AI conversation (the extension skips New chat). -----
+  var XT_FATT = [];
+  function xtFollowShow(on) {
+    if (!XT.feedFollow) return;
+    XT.feedFollow.style.display = on && XT.active ? 'flex' : 'none';
+    if (on && XT.followText) XT.followText.setAttribute('placeholder', 'Reply to ' + xtAiName(XT.ai) + ' in the same chat\u2026 (Ctrl+Enter to send)');
+    if (XT.followMsg && !on) XT.followMsg.textContent = '';
+  }
+  function xtFeedHistory(hist) {
+    (Array.isArray(hist) ? hist : []).forEach(function (h) {
+      if (!h || (!h.note && !h.text)) return;
+      var me = el('div', { class: 'me old', 'data-role': 'feed-user-old' });
+      me.appendChild(el('div', { class: 'txt' }, String(h.note || '(no note)')));
+      XT.feedScroll.appendChild(me);
+      if (h.text) { var rp = el('div', { class: 'reply old', 'data-role': 'reply-old', 'data-done': 'complete' }); xtMd(h.text, rp); XT.feedScroll.appendChild(rp); }
+    });
+  }
+  function xtFollowRender(msg) {
+    if (!XT.followNames) return;
+    XT.followNames.textContent = '';
+    XT_FATT.forEach(function (a) {
+      var chip = el('span', { 'data-role': 'followup-chip', 'data-name': a.name }, a.name + ' \u00b7 ' + xtKB(a.size));
+      var x = el('button', { type: 'button', 'aria-label': 'Remove ' + a.name }, '\u2715');
+      x.addEventListener('click', function () { XT_FATT = XT_FATT.filter(function (b) { return b.id !== a.id; }); xtFollowRender(''); });
+      chip.appendChild(x); XT.followNames.appendChild(chip);
+    });
+    if (XT.followMsg) XT.followMsg.textContent = msg || '';
+  }
+  function xtFollowAdd(list) {
+    var bad = [];
+    Array.prototype.forEach.call(list || [], function (f) { var e = xtAttAddOne(f, XT_FATT); if (e) bad.push(String(f.name || 'file').slice(0, 60) + ' ' + e); });
+    xtFollowRender(bad.length ? 'Not attached: ' + bad.join('; ') + '.' : '');
+  }
+  // The new turn goes under the earlier ones; the earlier ones stay on screen and in the saved record.
+  function xtFeedFollowUser(note) {
+    xtFeedMount();
+    xtFollowShow(false);
+    XT.followTurn = true;
+    XT.feed.setAttribute('data-state', 'sending'); XT.feed.removeAttribute('data-done');
+    XT.feedTitle.textContent = 'Sending to ' + xtAiName(XT.ai) + '\u2026';
+    XT.feedSpin.classList.remove('off');
+    if (XT.feedDot) XT.feedDot.className = 'dot on';
+    XT.feedFoot.style.display = 'none'; XT.feedFoot.textContent = '';
+    var prev = XT.feedRec || {};
+    var hist = (Array.isArray(prev.history) ? prev.history : []).concat([{ note: prev.note || '', text: prev.text || (XT.feedReply && XT.feedReply.getAttribute('data-plain')) || '' }]).slice(-6);
+    Array.prototype.forEach.call(XT.feedScroll.querySelectorAll('[data-role=reply]'), function (n) { n.classList.remove('live'); if (!n.getAttribute('data-done')) n.setAttribute('data-done', 'complete'); });
+    Array.prototype.forEach.call(XT.feedScroll.querySelectorAll('[data-role=error],[data-role=feed-stopped]'), function (n) { n.setAttribute('data-old', '1'); });
+    XT.feedReply = null; XT.feedFiles = null;
+    var row = el('div', { class: 'me', 'data-role': 'feed-user', 'data-follow': '1' });
+    row.appendChild(el('div', { class: 'txt', 'data-role': 'feed-note' }, note || '(no note)'));
+    XT.feedRec = { note: note || '(no note)', ai: XT.ai, state: 'sending', sent: XT.sent, history: hist };
+    xtFeedRecordSet(XT.feedRec);
+    XT.feedScroll.appendChild(row);
+    XT.feedSteps = el('div', { class: 'steps', 'data-role': 'feed-steps' });
+    XT.feedScroll.appendChild(XT.feedSteps);
+    XT.feedStick = true;
+    xtFeedScroll();
+  }
+  function xtFollowSend() {
+    if (!XT.active || XT.job !== null) return;
+    var note = XT.followText ? XT.followText.value.trim() : '';
+    var attList = XT_FATT.slice();
+    if (!note && !attList.length) { if (XT.followMsg) XT.followMsg.textContent = 'Write a message or attach a file first.'; return; }
+    xtChimeUnlock();
+    XT.aborted = false;
+    if (XT.box && XT.box.parentNode) { XT.box.parentNode.removeChild(XT.box); XT.box = null; }
+    var withFiles = XT.followFiles ? !!XT.followFiles.checked : false;
+    var imgs = withFiles ? xtImageCandidates(note) : [];
+    xtFeedFollowUser(note);
+    XT_FATT = []; if (XT.followText) XT.followText.value = ''; xtFollowRender('');
+    xtLog('followup_start', { files: attList.length, pageFiles: withFiles });
+    var row = (withFiles || attList.length) ? xtFeedAddStep('collect', false, withFiles ? 'Collecting page files\u2026' : 'Reading your attached files\u2026') : null;
+    xtAttTake(attList).then(function (att) {
+      return (withFiles ? xtCollectFiles(imgs, { files: att }) : Promise.resolve(null)).then(function (c) { return { att: att, c: c }; });
+    }).then(function (r) {
+      if (XT.aborted) return;
+      try {
+        var all = r.att.concat(r.c ? r.c.files : []);
+        xtRemember(all, true);
+        var msg = { id: 'f' + Date.now().toString(36), note: note, followUp: true, pageUrl: location.href };
+        if (XT.ai && XT_AI[XT.ai]) msg.provider = XT.ai;
+        if (all.length) { msg.files = all; msg.skipped = r.c ? r.c.skipped : []; }
+        XT.lastSend = null;                                                      // a retry would start a new chat: not for a follow-up
+        if (row) { row.setAttribute('data-ok', '1'); row.textContent = '\u2713 ' + (withFiles ? 'Collecting page files' : 'Your attached files') + ' (' + all.length + ')'; }
+        xtPost('dw-ext-submit', msg);
+        xtLog('followup_posted', { ai: XT.ai });
+        xtWaitForRelay();
+      } catch (e) { xtFeedError('submit_failed', 'submit', {}); }
+    }, function () { xtFeedError('collect_failed', 'collect', {}); });
   }
   function xtFeedAddStep(name, ok, label) {
     xtFeedMount();
@@ -782,7 +978,7 @@
     if ((name === 'send' || name === 'attach') && ok) {
       var haveShot = XT.feedSteps && XT.feedSteps.querySelector('[data-step=send],[data-step=attach]');
       var nf = d && typeof d.files === 'number' && d.files > 0 ? Math.min(50, d.files | 0) : 0;
-      var row = xtFeedAddStep(name, true, (name === 'send' && d && d.inline) ? 'Sent with the files as text (no screenshot)' : nf ? 'Uploaded screenshot + ' + nf + (nf === 1 ? ' file' : ' files') : 'Screenshot sent');
+      var row = xtFeedAddStep(name, true, (name === 'send' && d && d.inline) ? 'Sent with the files as text (no screenshot)' : XT.followTurn ? (nf ? 'Uploaded ' + nf + (nf === 1 ? ' file' : ' files') : 'Message sent') : nf ? 'Uploaded screenshot + ' + nf + (nf === 1 ? ' file' : ' files') : 'Screenshot sent');
       if (nf && row) row.setAttribute('data-files', String(nf));
       if (haveShot && row) row.style.display = 'none';
       if (XT.feedSteps && !XT.feedSteps.querySelector('[data-role=reading]')) {
@@ -798,6 +994,11 @@
         var r2 = xtFeedAddStep('stream', false, xtAiName(XT.ai) + ' is reading\u2026');
         r2.setAttribute('data-role', 'reading');
       }
+      return;
+    }
+    if (name === 'assets' && d) {                                                 // v0.1.12: files the AI made (download chips)
+      var ga = Math.min(8, d.got | 0), gm = Math.min(12, d.missed | 0), N2 = xtAiName(XT.ai);
+      xtFeedAddStep(name, ga > 0, ga ? 'Got ' + ga + (ga === 1 ? ' file ' : ' files ') + N2 + ' made' + (gm ? ' (' + gm + ' could not be read)' : '') : N2 + ' made ' + (gm || d.tags || 'some') + ' file(s) that could not be read');
       return;
     }
     if (name === 'attach_inline' && d && d.files > 0) { var ni = Math.min(50, d.files | 0); xtFeedAddStep(name, true, xtAiName(XT.ai) + ' did not take the upload, so ' + ni + (ni === 1 ? ' file' : ' files') + ' went in the message as text (no screenshot)'); return; }
@@ -838,6 +1039,7 @@
       XT.feedTitle.textContent = (d && d.status === 'stopped') ? 'Stopped' : xtAiName(XT.ai) + ' reply';
     }
     if (XT.feedReply) XT.feedReply.setAttribute('data-done', (d && d.status) || 'complete');
+    xtFollowShow(true);
     if (d && d.status === 'stopped' && XT.feedScroll) {
       XT.feedScroll.appendChild(el('div', { class: 'err', 'data-role': 'feed-stopped' }, 'Stopped. Nothing changed.'));
     }
@@ -868,14 +1070,16 @@
   function xtFeedError(code, step, d) {
     xtLog('feed_error', { code: code, step: step });
     xtFeedMount();
+    if (!XT.restoring) xtChime('error');
     if (XT.feedSpin) XT.feedSpin.classList.add('off');
     if (XT.feedDot) XT.feedDot.className = 'dot err';
     if (XT.feed) { XT.feed.setAttribute('data-state', 'error'); XT.feedTitle.textContent = 'Relay stopped'; }
     var N = xtAiName(XT.ai);
-    var msg = { not_logged_in: N + ' tab is not signed in.', no_stream: N + ' did not start answering.', done_timeout: N + ' took too long.', rate_limited: N + ' says the rate limit was hit.', usage_limit: N + ' says its usage limit was reached. Try again later, or pick the other AI.', not_paired: 'No ' + N + ' tab is paired.', busy: N + ' is still answering the previous request.', tab_open_failed: 'Could not open a ' + N + ' tab.', blocked_click: 'Stopped for safety on the ' + N + ' page.', relay_timeout: 'The ' + N + ' relay did not start after the files were collected. Try Send again, or check that a signed-in ' + N + ' tab is open.', submit_failed: 'The request could not be sent to ' + N + '.', collect_failed: 'Could not finish collecting the page files.', chat_tab_unreachable: 'Could not reach the ' + N + ' tab.', no_instructions: 'No instructions were loaded for ' + N + '.', sw_unreachable: 'The extension was reloaded or updated. Reload this page to reconnect it.', ext_inactive: 'The extension is not active on this page. Reload the page and press Send again.', relay_off: 'The relay is switched off in the extension. Switch it on, then press Send again.', no_gesture: 'The extension needs a fresh click. Press Send again.' }[code] || ('The AI relay stopped (' + String(code || 'error') + ').');
+    var msg = { no_conversation: 'The earlier ' + N + ' chat is not open any more, so a follow-up has nowhere to go. Press Suggest an edit to start a new chat.', empty_followup: 'Write a message or attach a file first.', not_logged_in: N + ' tab is not signed in.', no_stream: N + ' did not start answering.', done_timeout: N + ' took too long.', rate_limited: N + ' says the rate limit was hit.', usage_limit: N + ' says its usage limit was reached. Try again later, or pick the other AI.', not_paired: 'No ' + N + ' tab is paired.', busy: N + ' is still answering the previous request.', tab_open_failed: 'Could not open a ' + N + ' tab.', blocked_click: 'Stopped for safety on the ' + N + ' page.', relay_timeout: 'The ' + N + ' relay did not start after the files were collected. Try Send again, or check that a signed-in ' + N + ' tab is open.', submit_failed: 'The request could not be sent to ' + N + '.', collect_failed: 'Could not finish collecting the page files.', chat_tab_unreachable: 'Could not reach the ' + N + ' tab.', no_instructions: 'No instructions were loaded for ' + N + '.', sw_unreachable: 'The extension was reloaded or updated. Reload this page to reconnect it.', ext_inactive: 'The extension is not active on this page. Reload the page and press Send again.', relay_off: 'The relay is switched off in the extension. Switch it on, then press Send again.', no_gesture: 'The extension needs a fresh click. Press Send again.' }[code] || ('The AI relay stopped (' + String(code || 'error') + ').');
     var lim = code === 'file_limit', hadFiles = !!(XT.lastSend && XT.lastSend.hadFiles);
     if (lim) msg = xtLimitText(d, hadFiles);
     if (XT.feedScroll) XT.feedScroll.appendChild(el('div', { class: 'err', 'data-role': 'error', 'data-code': code }, msg + ' Nothing else changed.'));
+    xtFollowShow(true);
     xtDiagButton();
     xtSnapButton();
     if (lim && hadFiles) xtCard(msg, [{ act: 'retry-text', label: 'Send without page files', cls: 'go', fn: xtRetryTextOnly }], null, null, 'limit');
@@ -886,6 +1090,7 @@
     + '.card p{margin:0 0 8px}.row{display:flex;gap:6px;flex-wrap:wrap}.card a{color:#1f4d2b;font-weight:600}'
     + 'button{border:0;border-radius:8px;padding:7px 11px;font-size:13px;cursor:pointer;background:#eef2ec;color:#1d2a20}'
     + 'button.go{background:#1f4d2b;color:#fff;font-weight:600}button[disabled]{opacity:.5;cursor:default}.x{margin-left:auto;background:transparent}'
+    + '.files li.miss{color:#b42318;font-weight:700}button.blocked{background:#e5e7eb;color:#6b7280;cursor:not-allowed}'
     + '.cd{font-weight:600;color:#8a4b00}.files{margin:0 0 8px;padding:0 0 0 16px;max-height:140px;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}';
   function xtCard(text, buttons, link, items, state) {
     if (!XT.host) {
@@ -902,7 +1107,7 @@
     if (items && items.length) {
       var ul = el('ul', { class: 'files', 'data-role': 'dw-ext-files' });
       items.forEach(function (it) {
-        var li = el('li', { 'data-path': it.path || '' }, it.text);
+        var li = el('li', it.cls === 'miss' ? { 'data-path': it.path || '', class: 'miss', 'data-missing': '1' } : { 'data-path': it.path || '' }, it.text);
         if (it.href) { li.appendChild(document.createTextNode(' ')); li.appendChild(el('a', { href: it.href, target: '_blank', rel: 'noopener', 'data-act': it.act || 'link', 'data-path': it.path || '' }, it.linkText || 'Open')); }
         ul.appendChild(li);
       });
@@ -944,8 +1149,8 @@
     var re = /(\/?[A-Za-z0-9._~%-]+(?:\/[A-Za-z0-9._~%-]+)*\.[A-Za-z0-9]{1,5})/g, m;
     while ((m = re.exec(label))) {
       var tok = m[1], hit = null;
-      sent.forEach(function (f) { if (f.path === tok || f.path === '/' + tok.replace(/^\/+/, '')) hit = f; });
-      if (!hit) sent.forEach(function (f) { if (!hit && (f.base === tok || f.name === tok)) hit = f; });
+      sent.forEach(function (f) { if (!f.loose && (f.path === tok || f.path === '/' + tok.replace(/^\/+/, ''))) hit = f; });
+      if (!hit) sent.forEach(function (f) { if (!hit && !f.loose && (f.base === tok || f.name === tok)) hit = f; });
       if (hit && (!lang || hit.kind === lang)) best = hit;                       // a file named in passing of another type is skipped
     }
     if (best) return best;
@@ -1006,12 +1211,117 @@
     });
     return t.replace(/```[^\n]*\n[\s\S]*?\n?```/g, ' ');                      // v0.1.10: the reply text carries code as fences; prose is what is outside them
   }
+
+  // ----- v0.1.12: pictures the user attached (no path) that the AI's page now uses -----
+  // The AI is told to link an attached picture as assets/img/<its file name>, but it may pick its own name (and a .webp next
+  // to a .jpg). So: look in the staged HTML/CSS for local pictures that do not exist on the site yet, pair each with the
+  // attached picture it most likely means (same name, else shared words, else the only one), and stage the user's original
+  // there, at the path the reply uses, converted or scaled in the browser when the path asks for another type or size.
+  var XT_STOP = { hero: 1, img: 1, image: 1, photo: 1, picture: 1, pic: 1, jpeg: 1, jpg: 1, png: 1, webp: 1, gif: 1, the: 1, and: 1, final: 1, new: 1, copy: 1, large: 1, small: 1, thumb: 1, full: 1, edit: 1, edited: 1, scaled: 1 };
+  function xtTokens(name) {
+    return String(name || '').toLowerCase().replace(/\.[a-z0-9]{1,5}$/, '').split(/[^a-z0-9]+/).filter(function (t) { return t.length >= 3 && !/^\d+$/.test(t) && !XT_STOP[t]; });
+  }
+  function xtResolveRef(ref, fromPath) {
+    ref = String(ref || '').trim().replace(/&amp;/g, '&');
+    if (!ref || ref.charAt(0) === '#' || /^data:/i.test(ref)) return '';
+    if (ref.indexOf(location.origin + '/') === 0) ref = ref.slice(location.origin.length);
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref)) return '';                    // another site
+    ref = ref.split('#')[0].split('?')[0];
+    try { ref = decodeURI(ref); } catch (e) {}
+    if (!ref) return '';
+    var parts = (ref.charAt(0) === '/' ? ref : String(fromPath || '/').replace(/[^\/]*$/, '') + ref).split('/'), out = [];
+    for (var i = 0; i < parts.length; i++) { if (parts[i] === '' || parts[i] === '.') continue; if (parts[i] === '..') { out.pop(); continue; } out.push(parts[i]); }
+    var p = '/' + out.join('/');
+    if (!/^\/[A-Za-z0-9._~\/%-]+$/.test(p) || XT_BLOCKED.test(p) || !XT_IMG_MIME[xtExt(p)]) return '';
+    return p;
+  }
+  function xtPictureRefs(text, fromPath) {
+    var found = [], seen = {};
+    function add(r) { var p = xtResolveRef(r, fromPath); if (p && !seen[p]) { seen[p] = 1; found.push(p); } }
+    var m, re = /\b(?:src|data-src|poster|href|content)\s*=\s*["']([^"']+)["']/gi;
+    while ((m = re.exec(text))) add(m[1]);
+    re = /\bsrcset\s*=\s*["']([^"']+)["']/gi;
+    while ((m = re.exec(text))) m[1].split(',').forEach(function (c) { add(c.trim().split(/\s+/)[0]); });
+    re = /url\(\s*["']?([^"')\s]+)["']?\s*\)/gi;
+    while ((m = re.exec(text))) add(m[1]);
+    return found;
+  }
+  function xtPictureExists(path) {
+    return fetch(path, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.status !== 404 && r.status !== 410; }, function () { return true; });   // unsure: do not stage over it
+  }
+  // Which attached picture a missing path means: the most words in common with its name, or the only one when only one path is missing.
+  function xtPickLoose(refPath, loose, onlyOneMissing) {
+    var want = xtTokens(xtBase(refPath)), best = null, bestScore = 0;
+    loose.forEach(function (a) {
+      var have = xtTokens(a.name), score = want.filter(function (t) { return have.indexOf(t) >= 0; }).length;
+      if (xtBase(refPath).replace(/\.[a-z0-9]{1,5}$/i, '').toLowerCase() === a.name.replace(/\.[a-z0-9]{1,5}$/i, '').toLowerCase()) score += 5;
+      if (score > bestScore) { best = a; bestScore = score; }
+    });
+    if (best) return best;
+    return onlyOneMissing && loose.length === 1 ? loose[0] : null;
+  }
+  function xtImageFrom(dataUrl) {
+    return new Promise(function (res, rej) { var im = new Image(); im.onload = function () { res(im); }; im.onerror = function () { rej(new Error('decode')); }; im.src = dataUrl; });
+  }
+  // The bytes for one path: the original when it already fits, else scaled/converted on a canvas.
+  function xtMakePicture(att, refPath) {
+    var tmime = XT_IMG_MIME[xtExt(refPath)], amime = (/^data:([^;]+);/.exec(att.dataUrl) || [])[1] || XT_IMG_MIME[xtExt(att.name)];
+    var tok = /-(\d{3,4})(?:w)?\.[A-Za-z0-9]{1,5}$/.exec(refPath), maxW = tok ? parseInt(tok[1], 10) : 0;
+    var origB64 = String(att.dataUrl).split(',')[1] || '';
+    function asIs() { var size = Math.floor(origB64.length * 3 / 4); return size && size <= XT_LIM.file ? { b64: origB64, size: size, how: 'asis' } : null; }
+    if (amime === tmime && !maxW) return Promise.resolve(asIs());
+    return xtImageFrom(att.dataUrl).then(function (im) {
+      var w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+      if (amime === tmime && w <= maxW) return asIs();
+      if (tmime === 'image/gif') return null;                                      // a canvas cannot write a GIF
+      var tw = maxW && w > maxW ? maxW : w, th = Math.max(1, Math.round(h * tw / w));
+      var cv = document.createElement('canvas'); cv.width = tw; cv.height = th;
+      cv.getContext('2d').drawImage(im, 0, 0, tw, th);
+      return new Promise(function (res) {
+        cv.toBlob(function (b) {
+          if (!b || b.type !== tmime || !b.size || b.size > XT_LIM.file) { res(null); return; }
+          xtToDataUrl(b).then(function (d) { res({ b64: String(d).split(',')[1] || '', size: b.size, how: 'converted' }); }, function () { res(null); });
+        }, tmime, tmime === 'image/png' ? undefined : 0.84);
+      });
+    }, function () { return null; });
+  }
+  function xtLooseAssets(ups, sent, have) {
+    var loose = sent.filter(function (s) { return s.loose && s.dataUrl; });
+    if (!loose.length) return Promise.resolve([]);
+    var refs = [], seen = {};
+    ups.forEach(function (u) {
+      if (typeof u.content !== 'string' || (u.file.kind !== 'html' && u.file.kind !== 'css')) return;
+      xtPictureRefs(u.content, u.file.path).forEach(function (p) { if (!seen[p] && !have[p]) { seen[p] = 1; refs.push(p); } });
+    });
+    sent.forEach(function (s) { if (s.path && seen[s.path]) { refs = refs.filter(function (p) { return p !== s.path; }); } });   // a path the user named is handled by xtAsIs
+    refs = refs.slice(0, 12);
+    if (!refs.length) return Promise.resolve([]);
+    return Promise.all(refs.map(function (p) { return xtPictureExists(p).then(function (ok) { return ok ? null : p; }); })).then(function (list) {
+      var missing = list.filter(Boolean);
+      if (!missing.length) return [];
+      var groups = {}; missing.forEach(function (p) { groups[p.replace(/\.[A-Za-z0-9]{1,5}$/, '')] = 1; });
+      var oneGroup = Object.keys(groups).length === 1, out = [], p = Promise.resolve();
+      missing.forEach(function (path) {
+        p = p.then(function () {
+          var att = xtPickLoose(path, loose, oneGroup);
+          if (!att) return;
+          return xtMakePicture(att, path).then(function (pic) {
+            if (!pic) return;
+            have[path] = 1;
+            out.push({ file: { path: path, name: xtBase(path), base: xtBase(path), kind: 'img', attach: true, page: false }, content: { b64: pic.b64 }, size: pic.size, asis: pic.how === 'asis', derived: pic.how !== 'asis', from: att.name, loose: true });
+          });
+        });
+      });
+      return p.then(function () { return out; });
+    });
+  }
+
   // Files the user attached (with a path) that the reply names but did not send back as code: staged from the original
   // bytes. Only a path the reply names, only under the path the user typed, only a type on the allowlist.
   function xtAsIs(d, sent, have) {
     var prose = xtProse(d), out = [];
     sent.forEach(function (f) {
-      if (!f.attach || !f.dataUrl || have[f.path] || !xtNamed(prose, f.path)) return;
+      if (!f.attach || f.loose || !f.path || !f.dataUrl || have[f.path] || !xtNamed(prose, f.path)) return;
       var bin = f.kind === 'img' || f.kind === 'pdf';
       var content = bin ? { b64: String(f.dataUrl).split(',')[1] || '' } : f.text;
       if (content == null || (bin && !content.b64)) return;
@@ -1022,11 +1332,17 @@
     return out;
   }
   // What was sent with this request: the page itself always, plus the collected page files.
-  function xtRemember(files) {
+  var XT_IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+  function xtRemember(files, merge) {
     var page = xtPagePath();
     var sent = [{ path: page, name: xtBase(page), base: xtBase(page), kind: xtKind(page), page: true, text: null }];
+    if (merge && Array.isArray(XT.sent)) XT.sent.forEach(function (s) { if (!s.page) sent.push(s); else if (typeof s.text === 'string') sent[0].text = s.text; });   // v0.1.12: a follow-up adds to what this chat already holds
     (files || []).forEach(function (f) {
-      if (f.attached && !f.path) return;                                        // shown to the AI only: never saved to the site
+      if (f.attached && !f.path) {                                              // shown to the AI only: never saved by itself...
+        // v0.1.12: ...but a picture is kept (in memory) so that, if the AI's page uses it, the editor can stage it where the page points
+        if (XT_IMG_MIME[xtExt(f.name)] && f.dataUrl && !sent.some(function (s) { return s.loose && s.name === f.name; })) sent.push({ path: '', name: f.name, base: f.name, kind: 'img', page: false, attach: true, loose: true, dataUrl: f.dataUrl, text: null });
+        return;
+      }
       var k = xtKind(f.path); if (!k) return;
       var row = sent.filter(function (s) { return s.path === f.path; })[0];
       if (!row) { row = { path: f.path, name: f.name, base: xtBase(f.path), kind: k, page: false, text: null }; sent.push(row); }
@@ -1035,6 +1351,7 @@
       if (k !== 'img' && k !== 'pdf' && f.dataUrl) row.text = xtDecodeText(f.dataUrl);
     });
     XT.sent = sent.filter(function (s) { return s.kind; });
+    xtLooseSave(XT.sent);
     if (typeof xtFeedPersist === 'function') xtFeedPersist({ sent: XT.sent });
   }
   // The /files name and folder for a page path. On the app host pages live under /<brand>/, which is not part of the folder.
@@ -1089,21 +1406,147 @@
     }
     paint(); XT.cdTimer = setInterval(paint, 1000);
   }
-  function xtDone(d) {
+  function xtDone(d, quiet) {
     if (d.status !== 'complete') { return; }
     var sent = XT.sent || [{ path: xtPagePath(), name: xtBase(xtPagePath()), base: xtBase(xtPagePath()), kind: 'html', page: true, text: null }];
     var ups = xtUpdatesFrom(d, sent), have = {};
     ups.forEach(function (u) { have[u.file.path] = 1; });
     ups = xtCap(ups.concat(xtAsIs(d, sent, have)));
+    var gen = xtGenAssets(d, ups, have);                                        // v0.1.12: files the AI made (download chips)
+    ups = xtCap(ups.concat(gen.ups));
+    var p = (ups.length && sent.some(function (s) { return s.loose && s.dataUrl; }))
+      ? xtLooseAssets(ups, sent, have).then(function (extra) { return xtCap(ups.concat(extra)); }, function () { return ups; })
+      : Promise.resolve(ups);
+    p.then(function (all) {
+      return xtCheckRefs(all, sent).then(function (chk) { return { all: all, chk: chk }; }, function () { return { all: all, chk: { missing: [], old: [], refs: {} } }; });
+    }).then(function (r) {
+      r.chk.unplaced = gen.unplaced; r.chk.tags = d.assetsMissed ? d.assetsMissed.tags | 0 : 0;
+      r.chk.unread = d.assetsMissed && Array.isArray(d.assetsMissed.names) ? d.assetsMissed.names.map(function (x) { return String(x.name || ''); }).filter(Boolean) : [];
+      xtDone2(d, r.all, quiet, r.chk);
+    });
+  }
+
+  // ----- v0.1.12: files the AI made and showed as download chips (dw-ext-done assets: [{name, mime, b64, size}]) -----
+  // Each one is staged at the path the reply uses for that file name: a link in the returned HTML/CSS first, else a path
+  // the reply names in its own words. A file whose name the reply never uses is not staged (listed as unplaced).
+  function xtB64Text(b64) { try { var b = atob(b64); var u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new TextDecoder('utf-8', { fatal: true }).decode(u); } catch (e) { return null; } }
+  function xtProsePaths(d) {
+    var out = [], seen = {}, m, re = /(?:^|[\s(`'"*\[])(\/?(?:[A-Za-z0-9._~%-]+\/)*[A-Za-z0-9._~%-]+\.[A-Za-z0-9]{1,5})(?=$|[\s)`'",;:*\]]|\.(?:\s|$))/g, t = xtProse(d);
+    var root = XT.app && brand ? '/' + brand + '/' : '/';
+    while ((m = re.exec(t))) { var p = xtResolveAny(m[1].replace(/^\/+/, ''), root); if (p && !seen[p]) { seen[p] = 1; out.push(p); } }
+    return out;
+  }
+  function xtGenAssets(d, ups, have) {
+    var res = { ups: [], unplaced: [] };
+    var assets = (Array.isArray(d.assets) ? d.assets : []).filter(function (a) { return a && typeof a.name === 'string' && typeof a.b64 === 'string' && XT_MIME[xtExt(a.name)]; });
+    if (!assets.length) return res;
+    var refs = [];
+    ups.forEach(function (u) { if (typeof u.content === 'string' && (u.file.kind === 'html' || u.file.kind === 'css')) refs = refs.concat(xtAllRefs(u.content, u.file.path, u.file.kind)); });
+    var prevSt = xtStagedGet(); if (prevSt && Array.isArray(prevSt.missing)) refs = refs.concat(prevSt.missing);   // a follow-up that sends what was missing
+    var prose = xtProsePaths(d);
+    assets.forEach(function (a) {
+      var nm = a.name.toLowerCase();
+      var byName = function (p) { return xtBase(p).toLowerCase() === nm; };
+      var path = refs.filter(byName)[0] || prose.filter(byName)[0] || '';
+      if (!path) { res.unplaced.push(a.name); return; }
+      if (have[path]) return;                                                    // the reply already sent this file as code
+      var k = xtKind(path); if (!k) { res.unplaced.push(a.name); return; }
+      var content = (k === 'img' || k === 'pdf') ? { b64: a.b64 } : xtB64Text(a.b64);
+      if (content == null) { res.unplaced.push(a.name); return; }
+      var size = typeof content === 'string' ? new Blob([content]).size : Math.floor(a.b64.length * 3 / 4);
+      if (!size || size > XT_LIM.file) { res.unplaced.push(a.name); return; }
+      have[path] = 1;
+      res.ups.push({ file: { path: path, name: xtBase(path), base: xtBase(path), kind: k, attach: false, page: false }, content: content, size: size, gen: true });
+    });
+    return res;
+  }
+
+  // ----- v0.1.12: every file the new HTML/CSS links to must exist (on the site, or staged with it) before Publish -----
+  function xtResolveAny(ref, fromPath) {
+    ref = String(ref || '').trim().replace(/&amp;/g, '&');
+    if (!ref || ref.charAt(0) === '#' || /^(?:data|mailto|tel|javascript|blob|about):/i.test(ref)) return '';
+    if (ref.indexOf(location.origin + '/') === 0) ref = ref.slice(location.origin.length);
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref)) return '';                    // another site
+    if (/[{}$<>]/.test(ref)) return '';                                          // a template, not a path
+    ref = ref.split('#')[0].split('?')[0];
+    try { ref = decodeURI(ref); } catch (e) {}
+    if (!ref) return '';
+    var parts = (ref.charAt(0) === '/' ? ref : String(fromPath || '/').replace(/[^\/]*$/, '') + ref).split('/'), out = [];
+    for (var i = 0; i < parts.length; i++) { if (parts[i] === '' || parts[i] === '.') continue; if (parts[i] === '..') { out.pop(); continue; } out.push(parts[i]); }
+    var p = '/' + out.join('/');
+    if (!/^\/[A-Za-z0-9._~\/%() -]+$/.test(p) || XT_BLOCKED.test(p) || !/\.[A-Za-z0-9]{1,5}$/.test(p)) return '';   // folders and extension-less routes are not checked
+    return p;
+  }
+  function xtCssUrls(text) {
+    var out = [], m, re = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
+    while ((m = re.exec(text))) out.push(m[2].trim());
+    re = /@import\s+(["'])([^"']+)\1/gi;
+    while ((m = re.exec(text))) out.push(m[2]);
+    return out;
+  }
+  function xtAllRefs(text, fromPath, kind) {
+    var raw = [];
+    text = String(text || '');
+    if (kind === 'css') raw = xtCssUrls(text);
+    else {
+      var doc = null; try { doc = new DOMParser().parseFromString(text, 'text/html'); } catch (e) { doc = null; }
+      if (doc) {
+        Array.prototype.forEach.call(doc.querySelectorAll('[src]'), function (n) { if (n.tagName !== 'SCRIPT' || !n.getAttribute('type') || /javascript|module/i.test(n.getAttribute('type'))) raw.push(n.getAttribute('src')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('[srcset]'), function (n) { String(n.getAttribute('srcset')).split(',').forEach(function (c) { raw.push(c.trim().split(/\s+/)[0]); }); });
+        Array.prototype.forEach.call(doc.querySelectorAll('[poster]'), function (n) { raw.push(n.getAttribute('poster')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('link[href]'), function (n) { if (!/canonical|alternate|preconnect|dns-prefetch|me\b/i.test(n.getAttribute('rel') || '')) raw.push(n.getAttribute('href')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('a[href]'), function (n) { raw.push(n.getAttribute('href')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('meta[content]'), function (n) { if (/image|icon/i.test((n.getAttribute('property') || '') + (n.getAttribute('name') || ''))) raw.push(n.getAttribute('content')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('style'), function (n) { raw = raw.concat(xtCssUrls(n.textContent || '')); });
+        Array.prototype.forEach.call(doc.querySelectorAll('[style]'), function (n) { raw = raw.concat(xtCssUrls(n.getAttribute('style') || '')); });
+      }
+    }
+    var seen = {}, out = [];
+    raw.forEach(function (r) { var p = xtResolveAny(r, fromPath); if (p && !seen[p]) { seen[p] = 1; out.push(p); } });
+    return out;
+  }
+  // HEAD each path (a few at a time). 404/410 = missing. A network error is not counted as missing.
+  function xtCheckPaths(paths) {
+    var list = paths.slice(0, 60), missing = [], i = 0;
+    function next() {
+      if (i >= list.length) return Promise.resolve();
+      var p = list[i++];
+      return fetch(p, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if (r.status === 404 || r.status === 410) missing.push(p); }, function () {}).then(next);
+    }
+    var lanes = []; for (var k = 0; k < Math.min(6, list.length); k++) lanes.push(next());
+    return Promise.all(lanes).then(function () { return list.filter(function (p) { return missing.indexOf(p) >= 0; }); });
+  }
+  // Links in the files about to be staged that are neither staged with them nor on the site. A link that the file
+  // already had before this edit (and that was already broken) is listed apart and does not block Publish.
+  function xtCheckRefs(ups, sent) {
+    var staged = {}, refs = {}, before = {};
+    ups.forEach(function (u) { staged[u.file.path] = 1; });
+    var prev = xtStagedGet(); if (prev) prev.items.forEach(function (it) { staged[it.path] = 1; });
+    ups.forEach(function (u) {
+      if (typeof u.content !== 'string' || (u.file.kind !== 'html' && u.file.kind !== 'css')) return;
+      xtAllRefs(u.content, u.file.path, u.file.kind).forEach(function (p) { if (!staged[p]) refs[p] = (refs[p] || []).concat(u.file.path); });
+      var orig = (sent || []).filter(function (s) { return s.path === u.file.path && typeof s.text === 'string'; })[0];
+      if (orig) xtAllRefs(orig.text, u.file.path, u.file.kind).forEach(function (p) { before[p] = 1; });
+    });
+    var paths = Object.keys(refs);
+    if (!paths.length) return Promise.resolve({ missing: [], old: [], refs: refs });
+    return xtCheckPaths(paths).then(function (miss) {
+      xtLog('refcheck', { refs: paths.length, missing: miss.length });
+      return { missing: miss.filter(function (p) { return !before[p]; }), old: miss.filter(function (p) { return before[p]; }), refs: refs };
+    });
+  }
+  function xtDone2(d, ups, quiet, chk) {
+    chk = chk || { missing: [], old: [], refs: {} };
     if (!ups.length) {
       var frag = (Array.isArray(d.blocks) ? d.blocks : []).some(function (b) { return b && typeof b.code === 'string' && (XT_LANG[String(b.lang || '').toLowerCase()] === 'html') && !/<html[\s>]/i.test(b.code); }) ||
         /```html\s*\n(?![\s\S]*?<html[\s>])/i.test(String(d.text || ''));
+      if (!quiet) xtChime(frag ? 'error' : 'done');                               // finished, nothing to upload
       if (frag) xtCard('The AI sent only part of a page (a fragment), and a fragment cannot replace the page, so nothing was uploaded and the live site is unchanged. Ask it for the complete file, starting with <!DOCTYPE html> and ending with </html>.', []);
       return;
     }
     var n = ups.length;
     xtCard('The AI sent ' + (n === 1 ? 'an updated file' : n + ' updated files') + '. Uploading ' + (n === 1 ? 'it' : 'them') + ' as a preview\u2026 Nothing goes live until you publish.', [], null,
-      ups.map(function (u) { return { text: u.file.path + ' \u00b7 ' + xtKB(u.size) + (u.asis ? ' \u00b7 your file, as you attached it' : (u.file.attach ? ' \u00b7 your file, changed by the AI' : '')), path: u.file.path }; }), 'staging');
+      ups.map(function (u) { return { text: u.file.path + ' \u00b7 ' + xtKB(u.size) + (u.gen ? ' \u00b7 a file ' + xtAiName(XT.ai) + ' made' : '') + (u.derived ? ' \u00b7 your attached picture (' + u.from + '), ' + (xtExt(u.file.path) === xtExt(u.from) ? 'scaled' : 'converted') + ' for this path' : u.asis ? ' \u00b7 your file, as you attached it' : (u.file.attach ? ' \u00b7 your file, changed by the AI' : '')), path: u.file.path }; }), 'staging');
     xtEach(ups, function (u) {
       var t = xtTargetOf(u.file.path), body = { action: 'create', staging: true, file_name: t.file_name, file_path: t.file_path };
       if (typeof u.content === 'string') body.file_text = u.content; else body.file_data = u.content.b64;
@@ -1116,9 +1559,21 @@
         items = items.filter(function (x) { return x.id !== it.id; }); items.push(it);
       });
       var st = ok.length ? { exp: Date.now() + XT_TTL - 5000, items: items } : prev;   // every new staged upload restarts its own 10 minutes
+      if (st) {
+        // v0.1.12: links that point nowhere. A file that should have been staged with this reply but failed counts too.
+        var miss = (chk.missing || []).slice();
+        bad.forEach(function (r) { if (chk.refs && chk.refs[r.item.file.path] && miss.indexOf(r.item.file.path) < 0) miss.push(r.item.file.path); });
+        var stagedNow = {}; st.items.forEach(function (it) { stagedNow[it.path] = 1; });
+        (prev && prev.missing || []).forEach(function (p) { if (!stagedNow[p] && miss.indexOf(p) < 0) miss.push(p); });
+        st.missing = miss.filter(function (p) { return !stagedNow[p]; }).slice(0, 40);
+        st.oldMissing = (chk.old || []).slice(0, 20);
+        st.unplaced = (chk.unplaced || []).concat(chk.unread || []).slice(0, 12);
+        st.tags = chk.tags | 0;
+      }
       xtStagedSet(st);
       xtStagedCard(st, bad.length ? 'Not uploaded: ' + bad.map(function (r) { return r.item.file.path + ' (' + r.err + ')'; }).join(', ') + '.' : '', false);
-    }, xtFail);
+      if (!quiet) xtChime(ok.length && !(st && st.missing && st.missing.length) ? 'ok' : 'error');   // the reply is in and its files are staged
+    }, function (err) { xtFail(err); if (!quiet) xtChime('error'); });
   }
   // Publish / Discard controls for whatever is staged in this tab.
   function xtStagedCard(st, extra, reloaded) {
@@ -1130,8 +1585,20 @@
     var items = st.items.map(function (it) {
       return { text: it.path + (it.isNew ? ' (new)' : '') + (it.mine ? ' \u00b7 your file' : ''), path: it.path, href: location.origin + it.path, act: 'preview', linkText: 'Open preview' };
     });
+    // v0.1.12: a staged file that links to a file which does not exist cannot be published.
+    var missing = Array.isArray(st.missing) ? st.missing : [];
+    missing.forEach(function (p) { items.push({ text: 'MISSING: ' + p, path: p, cls: 'miss' }); });
+    if (missing.length) msg = 'Publish is blocked: the new version links to ' + (missing.length === 1 ? 'a file that is' : missing.length + ' files that are') + ' not on the site and ' + (missing.length === 1 ? 'was' : 'were') + ' not sent back by ' + xtAiName(XT.ai) + ' (marked MISSING below). Ask ' + xtAiName(XT.ai) + ' for ' + (missing.length === 1 ? 'it' : 'them') + ' in the follow-up box, or attach the file, then press Check again. ' + msg;
+    if (Array.isArray(st.oldMissing) && st.oldMissing.length) msg += ' Already broken before this edit (not blocking): ' + st.oldMissing.join(', ') + '.';
+    if (Array.isArray(st.unplaced) && st.unplaced.length) msg += ' ' + xtAiName(XT.ai) + ' made ' + st.unplaced.join(', ') + ' but it was not used (its name is not linked anywhere, or it could not be read).';
+    var check = { act: 'recheck', label: 'Check again', fn: function (b) {
+      b.disabled = true; b.textContent = 'Checking\u2026';
+      xtCheckPaths(missing).then(function (still) { var cur = xtStagedGet() || st; cur.missing = still; xtStagedSet(cur); xtStagedCard(cur, still.length ? '' : 'All linked files are there now.', reloaded); });
+    } };
     xtCard(msg, [
+      missing.length ? { act: 'publish', label: 'Publish blocked', cls: 'blocked', fn: function () {} } :
       { act: 'publish', label: n === 1 ? 'Publish' : 'Publish ' + n + ' files', cls: 'go', fn: function (b) {
+        var now = xtStagedGet(); if (now && now.missing && now.missing.length) return;
         if (!window.confirm('Publish ' + (n === 1 ? 'this staged file' : 'these ' + n + ' staged files') + ' to the live site? The current versions are kept in /files history.')) return;
         b.disabled = true; b.textContent = 'Publishing\u2026';
         xtEach(st.items, function (it) { return xtCall({ action: 'publish_staging', id: it.id }); }).then(xtPublished, xtFail);
@@ -1141,7 +1608,8 @@
         xtEach(st.items, function (it) { return xtCall({ action: 'discard_staging', id: it.id }); }).then(xtDiscarded, xtFail);
       } },
       { act: 'reload', label: reloaded ? 'Reload preview' : (here ? 'Show preview (reload)' : 'Reload page'), fn: function () { location.reload(); } }
-    ], null, items, 'staged');
+    ].concat(missing.length ? [check] : []), null, items, 'staged');
+    if (missing.length && XT.box) { XT.box.setAttribute('data-blocked', '1'); var pb = XT.box.querySelector('[data-act=publish]'); if (pb) { pb.disabled = true; pb.setAttribute('aria-disabled', 'true'); pb.title = 'Blocked: some linked files are missing'; } }
     xtTick(st.exp);
   }
   function xtPublished(rs) {

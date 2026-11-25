@@ -763,4 +763,74 @@ scenarios['feed-survives-reload'] = async (env) => {
 };
 
 
+// v0.1.12: Gemini makes the two hero pictures with code and shows them as download chips. The extension reads the
+// chips (one through the page hook catching the chip's own download, one from its link), the editor stages them at
+// the paths the page links, nothing is missing so Publish is on, the chime plays, and a follow-up goes into the SAME
+// Gemini chat (no New chat).
+scenarios['gemini-chips-followup'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=taro&chips=1');
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const staged = await L.waitFor(async () => { const s = env.mock.state.staged.filter((x) => x.action === 'create'); return s.length >= 3 ? s : null; }, 30000, 'three staged files').catch(() => env.mock.state.staged);
+  const byName = Object.fromEntries(staged.map((x) => [x.file_name, x]));
+  c.check('page_staged', !!byName['editor.html'] && byName['editor.html'].staging === true, staged);
+  c.check('webp_from_download_chip_staged_at_linked_path', !!byName['hanalei-taro-1600.webp'] && byName['hanalei-taro-1600.webp'].file_path === 'assets/img' && /^UklGR/.test(byName['hanalei-taro-1600.webp'].data || ''), byName['hanalei-taro-1600.webp']);
+  c.check('jpg_from_chip_link_staged_at_linked_path', !!byName['hanalei-taro-1600.jpg'] && byName['hanalei-taro-1600.jpg'].file_path === 'assets/img' && /^\/9j\//.test(byName['hanalei-taro-1600.jpg'].data || ''), byName['hanalei-taro-1600.jpg']);
+  const card = await L.waitFor(async () => {
+    const x = await dw.evaluate(() => {
+      const r = document.getElementById('dw-ext-actions'); const sr = r && r.shadowRoot; const pub = sr && sr.querySelector('[data-state=staged] [data-act=publish]');
+      const feed = document.getElementById('dw-ext-feed'); const f = feed && feed.shadowRoot && feed.shadowRoot.querySelector('.feed');
+      return pub ? { pub: pub.textContent, disabled: pub.disabled, missing: sr.querySelectorAll('[data-missing]').length, chime: f && f.getAttribute('data-chime'), assetsStep: f ? (f.textContent.match(/Got \d+ files? \w+ made[^)]*\)?/) || [''])[0] : '' } : null;
+    });
+    return x;
+  }, 20000, 'staged card').catch(async () => { const t = await dw.evaluate(() => { const r = document.getElementById('dw-markup-root'); const f = document.getElementById('dw-ext-feed'); return { markup: r && r.shadowRoot ? r.shadowRoot.textContent.slice(-600) : null, feed: f && f.shadowRoot ? f.shadowRoot.textContent.slice(-900) : null }; }); return { timeout: true, t, staged: env.mock.state.staged }; });
+  c.check('publish_enabled_nothing_missing', card && !card.disabled && card.missing === 0 && /Publish 3 files/.test(card.pub), card);
+  c.check('chime_played_after_staging', card && card.chime === 'ok', card);
+  c.check('feed_says_files_were_read', card && /Got 2 files Gemini made/.test(card.assetsStep || ''), card);
+  const gem = env.ctx.pages().find((p) => p.url().startsWith(env.mock.gemUrl));
+  const g1 = gem ? await gem.evaluate(() => ({ downloads: window.__downloads || 0, n: document.querySelectorAll('model-response').length, url: location.pathname })) : null;
+  c.check('chip_download_button_clicked_once_and_caught', g1 && g1.downloads === 1, g1);
+  // follow-up in the same chat
+  await dw.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; sr.querySelectorAll('[data-role=reply]').forEach((r) => r.setAttribute('data-e2e-before', '1')); const t = sr.querySelector('[data-role=followup-text]'); t.value = 'The second image did not load'; });
+  await dw.locator('#dw-ext-feed').evaluate((h) => h.shadowRoot.querySelector('[data-act=followup-send]').click());
+  const out2 = await L.waitFor(async () => dw.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; const r = sr.querySelector('[data-role=reply][data-done]:not([data-e2e-before])'); const e = sr.querySelector('[data-role=error]:not([data-old])'); return r ? { done: r.getAttribute('data-done') } : e ? { error: e.textContent } : null; }), 60000, 'follow-up reply').catch((e) => ({ error: String(e) }));
+  c.check('followup_reply_done', out2 && out2.done === 'complete', out2);
+  const g2 = gem ? await gem.evaluate(() => ({ n: document.querySelectorAll('model-response').length, newChat: window.__newChat || 0, last: (document.querySelectorAll('user-query .query-text')[1] || {}).textContent || '' })) : null;
+  c.check('followup_went_into_the_same_chat', g2 && g2.n === 2 && g2.newChat === 0 && /second image did not load/.test(g2.last), g2);
+  return c.steps;
+};
+
+// v0.1.12: same reply but Gemini shows no chips: the page links two pictures that do not exist, so Publish is blocked
+// and both are listed as MISSING.
+scenarios['gemini-missing-blocks-publish'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=taro');
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const card = await L.waitFor(async () => dw.evaluate(() => {
+    const r = document.getElementById('dw-ext-actions'); const sr = r && r.shadowRoot; const pub = sr && sr.querySelector('[data-state=staged] [data-act=publish]');
+    const f = document.getElementById('dw-ext-feed').shadowRoot.querySelector('.feed');
+    return pub ? { pub: pub.textContent, disabled: pub.disabled, missing: [...sr.querySelectorAll('[data-missing]')].map((x) => x.textContent), recheck: !!sr.querySelector('[data-act=recheck]'), chime: f.getAttribute('data-chime') } : null;
+  }), 20000, 'staged card').catch((e) => ({ error: String(e) }));
+  c.check('publish_blocked', card && card.disabled === true && /blocked/i.test(card.pub || ''), card);
+  c.check('both_missing_listed', card && Array.isArray(card.missing) && card.missing.length === 2 && card.missing.some((t) => /hanalei-taro-1600\.webp/.test(t)) && card.missing.some((t) => /hanalei-taro-1600\.jpg/.test(t)), card);
+  c.check('check_again_offered', card && card.recheck === true, card);
+  c.check('error_chime', card && card.chime === 'error', card);
+  c.check('only_the_page_was_staged', env.mock.state.staged.filter((x) => x.action === 'create').length === 1, env.mock.state.staged);
+  return c.steps;
+};
+
 module.exports.scenarios = scenarios;

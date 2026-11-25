@@ -32,6 +32,10 @@
     '.note{color:#9aa3ad;font-size:12px}.error{color:#f87171;font-size:12px}',
     '.log{color:#9aa3ad;font-size:11px;line-height:1.45}',
     '.log .step{display:flex;align-items:center;gap:6px}',
+    '.fu{border-top:1px solid #2d3138;padding:7px 9px;display:flex;flex-direction:column;gap:6px;background:#181a1e}',
+    '.fu textarea{width:100%;min-height:44px;max-height:120px;resize:vertical;border:1px solid #333844;border-radius:6px;background:#111318;color:#e8eaed;padding:6px 7px;font:12px/1.4 ui-sans-serif,system-ui,sans-serif}',
+    '.fu .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.fu button{border:0;border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;background:#2a2f36;color:#e8eaed}.fu button.go{background:#2563eb;color:#fff;font-weight:600}.fu button:disabled{opacity:.45;cursor:default}',
+    '.fu .names{color:#9aa3ad;font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.hide{display:none}'
   ].join('');
 
@@ -62,7 +66,13 @@
     var bPause = el(doc, 'button', { type: 'button', 'data-act': 'pause', title: 'Hold the relay; nothing new is sent until you resume' }, 'Pause');
     var bUnpair = el(doc, 'button', { type: 'button', 'data-act': 'unpair', title: 'Forget the paired AI tab' }, 'Unpair');
     var bMin = el(doc, 'button', { type: 'button', 'data-act': 'min', title: 'Collapse' }, '\u2212');
-    [dot, title, pick, spin, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
+    // v0.1.12: a soft chime when the AI finishes (a different gentle tone on error); this switch is remembered.
+    var bMute = el(doc, 'button', { type: 'button', 'data-act': 'mute', title: 'Chime when the AI finishes: on / off' }, '');
+    function paintMute() { var m = !!(window.DWX && DWX.chime && DWX.chime.muted()); bMute.textContent = m ? '\uD83D\uDD07' : '\uD83D\uDD14'; bMute.setAttribute('aria-pressed', m ? 'true' : 'false'); bMute.setAttribute('aria-label', m ? 'Chime is off. Turn on' : 'Chime is on. Turn off'); }
+    paintMute();
+    bMute.addEventListener('click', function () { if (!(window.DWX && DWX.chime)) return; var m = !DWX.chime.muted(); DWX.chime.setMuted(m); paintMute(); if (!m) { DWX.chime.unlock(); DWX.chime.play('done'); } });
+    function chime(kind) { try { if (window.DWX && DWX.chime) DWX.chime.play(kind); } catch (e) {} }
+    [dot, title, pick, spin, bMute, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
     var opt = el(doc, 'label', { class: 'opt' });
     var chk = el(doc, 'input', { type: 'checkbox', 'data-role': 'relay-toggle' });
     chk.checked = true;
@@ -71,6 +81,32 @@
     var scroll = el(doc, 'div', { class: 'scroll', 'data-role': 'scroll', role: 'log', 'aria-live': 'polite' });
     var body = el(doc, 'div', { 'data-role': 'body' });
     body.appendChild(opt); body.appendChild(scroll);
+    // v0.1.12: follow-up box. After a reply it sends the next message into the SAME AI chat (no New chat).
+    var fu = el(doc, 'div', { class: 'fu hide', 'data-role': 'followup' });
+    var fuText = el(doc, 'textarea', { 'data-role': 'followup-text', placeholder: 'Reply to the AI in the same chat\u2026', 'aria-label': 'Follow-up message' });
+    var fuRow = el(doc, 'div', { class: 'row' });
+    var fuFile = el(doc, 'input', { type: 'file', multiple: 'multiple', class: 'hide', 'data-role': 'followup-file' });
+    var fuAttach = el(doc, 'button', { type: 'button', 'data-act': 'followup-attach' }, 'Attach\u2026');
+    var fuNames = el(doc, 'span', { class: 'names', 'data-role': 'followup-names' }, '');
+    var fuSend = el(doc, 'button', { type: 'button', class: 'go', 'data-act': 'followup-send' }, 'Send follow-up');
+    [fuAttach, fuNames, fuSend, fuFile].forEach(function (n) { fuRow.appendChild(n); });
+    fu.appendChild(fuText); fu.appendChild(fuRow); body.appendChild(fu);
+    var fuPicked = [], canFollow = false;
+    fuAttach.addEventListener('click', function () { fuFile.click(); });
+    fuFile.addEventListener('change', function () { fuPicked = Array.prototype.slice.call(fuFile.files || [], 0, 10); fuNames.textContent = fuPicked.map(function (f) { return f.name; }).join(', '); });
+    function readFile(f) { return new Promise(function (res) { var fr = new FileReader(); fr.onload = function () { res({ name: String(f.name || 'file').replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[._-]+/, '').slice(0, 100), type: f.type, size: f.size, dataUrl: String(fr.result) }); }; fr.onerror = function () { res(null); }; fr.readAsDataURL(f); }); }
+    function sendFollow() {
+      var note = fuText.value.trim();
+      if ((!note && !fuPicked.length) || !h.onFollowUp) return;
+      if (window.DWX && DWX.chime) DWX.chime.unlock();
+      fuSend.disabled = true;
+      Promise.all(fuPicked.map(readFile)).then(function (fs) {
+        fuText.value = ''; fuPicked = []; fuFile.value = ''; fuNames.textContent = ''; fuSend.disabled = false;
+        h.onFollowUp(note, fs.filter(Boolean));
+      });
+    }
+    fuSend.addEventListener('click', sendFollow);
+    fuText.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendFollow(); } });
     wrap.appendChild(hd); wrap.appendChild(body);
     root.appendChild(wrap);
 
@@ -142,6 +178,7 @@
       bStop.disabled = !s.busy; bPause.disabled = !s.paired; bUnpair.disabled = !s.paired;
       bPause.textContent = s.paused ? 'Resume' : 'Pause';
       chk.disabled = !s.active;
+      fu.classList.toggle('hide', !(canFollow && s.active && !s.busy && h.onFollowUp));
       var hint = scroll.querySelector('[data-role=hint]');
       if (!pairedHere) {
         var ht = 'On Send, an open ' + name + ' tab is reused, or a new one opens in the background. Sign in to ' + name + ' in Chrome first.';
@@ -165,7 +202,7 @@
       setState: function (st) { state = Object.assign(state, st); render(); },
       setRelayChecked: function (on) { chk.checked = !!on; },
       addUser: function (text, shot) {
-        replyEl = null; filesEl = null; logEl = null;
+        replyEl = null; filesEl = null; logEl = null; canFollow = false; fu.classList.add('hide');
         // v0.1.11: keep earlier turns (including a restored reply). Mark them done / not live so they are not taken for this send.
         Array.prototype.forEach.call(scroll.querySelectorAll('[data-role=reply]'), function (n) {
           n.classList.remove('live');
@@ -184,7 +221,7 @@
       step: function (name, ok, detail, pageFiles) {
         ensureReply();
         var nameAi = L(state.provider || 'chatgpt');
-        var labels = { instructions: 'Getting ready', open_tab: 'Opening ' + nameAi, newChat: 'New chat', prompt: 'Opening ' + nameAi, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: nameAi + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions', attach_inline: nameAi + ' did not take the upload, so the files went in the message as text (no screenshot)' };
+        var labels = { instructions: 'Getting ready', open_tab: 'Opening ' + nameAi, newChat: 'New chat', prompt: 'Opening ' + nameAi, text: 'Writing your note', attach: 'Screenshot sent', send: 'Screenshot sent', stream: nameAi + ' is reading\u2026', stop: 'Stopped', retry_bundled: 'Trying the bundled instructions', attach_inline: nameAi + ' did not take the upload, so the files went in the message as text (no screenshot)', assets: 'Read the files ' + nameAi + ' made' };
         var label = labels[name] || name;
         if ((name === 'send' || name === 'attach') && ok) {
           var haveShot = logEl.querySelector('[data-step=send],[data-step=attach]');
@@ -226,10 +263,10 @@
         });
         autoscroll();
       },
-      done: function (status) { ensureReply(); replyEl.classList.remove('live'); replyEl.setAttribute('data-done', status); spin.classList.add('off'); if (status === 'stopped') this.note('Stopped.'); },
+      done: function (status, quiet) { ensureReply(); replyEl.classList.remove('live'); replyEl.setAttribute('data-done', status); spin.classList.add('off'); if (status === 'stopped') this.note('Stopped.'); else if (!quiet) chime('done'); canFollow = true; render(); },
       error: function (msg) {
         scroll.appendChild(el(doc, 'div', { class: 'error', 'data-role': 'error' }, msg));
-        if (replyEl) replyEl.classList.remove('live'); spin.classList.add('off'); dot.classList.add('err');
+        if (replyEl) replyEl.classList.remove('live'); spin.classList.add('off'); dot.classList.add('err'); chime('error'); canFollow = true; render();
         if (h.onSnapshot && !scroll.querySelector('[data-act=snapshot]')) {
           var row = el(doc, 'div', { class: 'note', 'data-role': 'snap-row' });
           var b = el(doc, 'button', { type: 'button', 'data-act': 'snapshot' }, 'Send page snapshot');

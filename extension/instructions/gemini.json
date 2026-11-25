@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "site": "gemini",
-  "revision": 3,
-  "version": "2026.11.24-3",
-  "minExtVersion": "0.1.10",
+  "revision": 4,
+  "version": "2026.11.24-4",
+  "minExtVersion": "0.1.12",
   "verified": false,
-  "notes": "UNVERIFIED against a live signed-in gemini.google.com (built from public knowledge of its web DOM plus owner snapshot s2b34afff, selectors only, and the owner's v0.1.9 retest). rev 2: Upload & tools menu + page hook (content/ai-hook.js), drop and paste fallbacks, growth-based chip confirmation, inlineFallback. rev 3: steps.blocks.markdownText reads the reply as markdown (code blocks as fences, raw HTML runs fenced, whole documents become blocks). Chip and code-block names are still unverified.",
+  "notes": "UNVERIFIED against a live signed-in gemini.google.com (built from public knowledge of its web DOM plus owner snapshot s2b34afff, selectors only, and the owner's v0.1.9 retest). rev 2: Upload & tools menu + page hook (content/ai-hook.js), drop and paste fallbacks, growth-based chip confirmation, inlineFallback. rev 3: steps.blocks.markdownText reads the reply as markdown (code blocks as fences, raw HTML runs fenced, whole documents become blocks). Chip and code-block names are still unverified. rev 4 (v0.1.12): steps.files.generated reads files Gemini made with code (download chips under the reply) once the reply is done: chip elements by selector or by a whole-text file name, the bytes from the chip's link or, through the page hook, from the chip's own download button (the download is caught, not saved to disk). Chip markup is unverified against a live reply; needs extension 0.1.12 (older extensions keep their bundled rev).",
   "match": {
     "hosts": [
       "gemini.google.com"
@@ -227,7 +227,50 @@
             "single-image img[src*='googleusercontent.com']"
           ]
         }
-      ]
+      ],
+      "generated": {
+        "useHook": true,
+        "selectors": [
+          "code-execution-file",
+          "generated-file",
+          "file-download-chip",
+          "download-chip",
+          "[data-test-id*='generated-file' i]",
+          "[data-test-id*='file-chip' i]",
+          "[data-test-id*='download' i][data-test-id*='file' i]",
+          "[class*='generated-file' i]",
+          "[class*='file-chip' i]",
+          "[class*='download-chip' i]",
+          "message-content a[download]",
+          "message-content a[href^='blob:']"
+        ],
+        "textNames": true,
+        "climb": 4,
+        "downloadSelectors": [
+          "a[download]",
+          "button[aria-label*='download' i]",
+          "a[aria-label*='download' i]",
+          "[role='button'][aria-label*='download' i]",
+          "[data-test-id*='download' i]",
+          {
+            "css": "button, [role='button']",
+            "textMatches": "^\\s*(file_)?download(_for_offline)?\\s*$"
+          },
+          {
+            "css": "button, [role='button']",
+            "textMatches": "^\\s*(download|save)( file| image)?\\s*$"
+          }
+        ],
+        "allowedHosts": [
+          "googleusercontent.com",
+          "gemini.google.com",
+          "usercontent.google.com"
+        ],
+        "tagText": "\\[file-tag:\\s*[^\\]]{1,120}\\]",
+        "timeoutMs": 25000,
+        "fetchMs": 12000,
+        "captureMs": 8000
+      }
     },
     "errors": [
       {
@@ -303,7 +346,7 @@
   },
   "integrity": {
     "alg": "sha256",
-    "hash": "47ab80d3720725a9f285f09ad72ea29b71d2e3f6e97f8c53e78c5afa8b62c28a",
+    "hash": "8aa21d7971386a7ddd9d525c38ed5277ae026d2ca76fad94abe7523fe347dc1c",
     "sig": "",
     "keyId": ""
   }

@@ -8,7 +8,7 @@
  */
 (function (root, factory) {
   var deps = (typeof module === 'object' && module.exports)
-    ? { I: require('./interpreter.js'), D: require('./done.js') }
+    ? { I: Object.assign({}, require('./interpreter.js'), require('./assets.js')), D: require('./done.js') }
     : { I: root.DWX, D: root.DWX };
   var api = factory(deps.I, deps.D);
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -84,9 +84,29 @@
       cleanup();
       var evt = { kind: 'done', status: status, text: s.text, files: s.files, blocks: [] };
       try { evt.blocks = I.readBlocks(win, doc, instr, ctl.baseline); } catch (e) { evt.blocks = []; }
-      if (ctl.paused) { ctl.pendingFinal = evt; ctl.finished = true; }
-      else { emit({ kind: 'chunk', seq: ++ctl.seq, text: s.text, files: s.files }); emit(evt); }
-      result.resolve({ ok: true, status: status, text: s.text });
+      function out() {
+        if (ctl.paused) { ctl.pendingFinal = evt; ctl.finished = true; }
+        else { emit({ kind: 'chunk', seq: ++ctl.seq, text: s.text, files: s.files }); emit(evt); }
+        result.resolve({ ok: true, status: status, text: s.text });
+      }
+      // v0.1.12: files the AI made and showed as download chips (instr.steps.files.generated). Read after the reply is
+      // done, before the done event, so the editor can stage them with the code blocks. Best effort, time-boxed.
+      var gen = steps.files && steps.files.generated;
+      if (status === 'complete' && gen && I.collectAssets) {
+        var cap = (gen.timeoutMs || 25000) + 5000, settled = false;
+        var settle = function (r) {
+          if (settled) return; settled = true;
+          r = r || { assets: [], missed: [], tags: 0 };
+          evt.assets = r.assets || [];
+          if ((r.missed && r.missed.length) || r.tags) evt.assetsMissed = { names: (r.missed || []).slice(0, 12).map(function (m) { return { name: String(m.name).slice(0, 120), why: String(m.why).slice(0, 20) }; }), tags: r.tags | 0 };
+          if (evt.assets.length || evt.assetsMissed) emit({ kind: 'step', step: 'assets', ok: evt.assets.length > 0, detail: { got: evt.assets.length, missed: (r.missed || []).length, tags: r.tags | 0 } });
+          out();
+        };
+        var tm = win.setTimeout(function () { settle(null); }, cap);
+        I.collectAssets(win, doc, instr, ctl.baseline, { ensureHook: hooks.ensureHook }).then(function (r) { win.clearTimeout(tm); settle(r); }, function () { win.clearTimeout(tm); settle(null); });
+        return;
+      }
+      out();
     }
 
     function evaluate() {
@@ -135,7 +155,9 @@
         }
         var order = instr.flow || ['text', 'attach', 'send'];
         // v0.1.6: start from a fresh, empty conversation (sites whose instructions list "newChat" first).
-        if (order.indexOf('newChat') !== -1 && steps.newChat) {
+        // v0.1.12: a follow-up (job.followUp) continues the SAME conversation, so New chat is skipped.
+        if (job.followUp) emit({ kind: 'step', step: 'followUp', ok: true, detail: { kept: true } });
+        else if (order.indexOf('newChat') !== -1 && steps.newChat) {
           var nc = steps.newChat, home = false;
           try { home = !!nc.homePath && new RegExp(nc.homePath).test(win.location.pathname); } catch (e) {}
           var empty = function () { return I.countMessages(doc, instr) === 0; };

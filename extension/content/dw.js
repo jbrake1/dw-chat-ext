@@ -129,7 +129,7 @@
       var rec = r.result;
       if (S.panel && rec.text) {
         S.panel.setReply(rec.text, rec.files);
-        if (rec.status === 'complete' || rec.status === 'stopped') S.panel.done(rec.status === 'stopped' ? 'stopped' : 'complete');
+        if (rec.status === 'complete' || rec.status === 'stopped') S.panel.done(rec.status === 'stopped' ? 'stopped' : 'complete', true);
       }
       toPage('dw-ext-restore', {
         ok: true, jobId: rec.jobId, path: rec.path || rec.pagePath || pagePath(), pageUrl: rec.pageUrl,
@@ -164,7 +164,16 @@
       onOpenFile: function (id) { send({ type: 'dw:control', action: 'openFile', id: id }); },
       onToggle: function (on) { S.relay = !!on; chrome.storage.local.set({ relayEnabled: !!on }); },
       onProvider: function (id) { if (DWX.providers.valid(id)) send({ type: 'dw:setProvider', provider: id }); },
-      onSnapshot: function () { return send({ type: 'dw:snapshot' }); }
+      onSnapshot: function () { return send({ type: 'dw:snapshot' }); },
+      onFollowUp: function (note, list) {
+        // v0.1.12: the panel's follow-up box (no editor on this page): same AI chat, optional attached files.
+        if (!S.active || !S.relay) { if (S.panel) S.panel.error('Not sent: the relay is off.'); return; }
+        var pf2 = DWX.sanitizePageFiles((list || []).map(function (f) { return { name: f.name, path: '', mime: f.type, size: f.size, dataUrl: f.dataUrl, attached: true }; }), [], {});
+        var n2 = String(note || '').slice(0, 5000);
+        if (!n2 && !pf2.files.length) return;
+        var prov = S.jobProvider || (S.state && S.state.provider) || null;
+        submitJob({ provider: DWX.providers.valid(prov) ? prov : null, followUp: true, prompt: (n2 || '(see the attached files)') + DWX.filesPrompt(pf2.files, pf2.skipped, null), file: null, files: pf2.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: true }; }), note: n2, hadShot: false, pageUrl: location.href, pagePath: pagePath() });
+      }
     });
     chrome.storage.local.get('relayEnabled').then(function (d) { S.relay = d.relayEnabled !== false; if (S.panel) S.panel.setRelayChecked(S.relay); });
   }
@@ -192,6 +201,7 @@
     if (via === 'tap' && S.nativeHook) return;               // page has its own hook; ignore the tap
     if (Date.now() - S.lastGesture > 120000) { dwLog('submit_ignored', { why: 'no_gesture', via: via }); if (via === 'native' && S.wantEvents) toPage('dw-ext-error', { code: 'no_gesture', step: 'submit' }); return; }   // must follow a real click/keypress by the user
     var note = String(d.note || '').slice(0, 5000);
+    var follow = via === 'native' && d.followUp === true;                       // v0.1.12: the next message in the SAME AI conversation
     var shot = typeof d.screenshot === 'string' && DATA_URL.test(d.screenshot) && d.screenshot.length < 20 * 1024 * 1024 ? d.screenshot : null;
     var mime = shot ? DATA_URL.exec(shot)[1] : null;
     var file = shot ? { name: 'markup.' + (mime === 'jpeg' ? 'jpg' : mime), type: 'image/' + mime, dataUrl: shot } : null;
@@ -202,10 +212,11 @@
     if (via === 'native' && (Array.isArray(d.files) || Array.isArray(d.skipped))) {
       pf = DWX.sanitizePageFiles(d.files, d.skipped, { reserved: file ? [file.name] : [] });
     }
-    var prompt = buildPrompt({ note: note, pageUrl: d.pageUrl }) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
+    if (follow && !note && !pf.files.length) { dwLog('submit_ignored', { why: 'empty_followup', via: via }); if (S.wantEvents) toPage('dw-ext-error', { code: 'empty_followup', step: 'submit' }); return; }
+    var prompt = (follow ? String(note || '(see the attached files)') : buildPrompt({ note: note, pageUrl: d.pageUrl })) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
     // v0.1.6: the editor may name the AI (dw-ext-submit provider: 'chatgpt' | 'gemini'); anything else is ignored.
     var provider = (via === 'native' && DWX.providers.valid(d.provider)) ? d.provider : null;
-    var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot, pageUrl: d.pageUrl || location.href, pagePath: pagePath() };
+    var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, followUp: follow, hadShot: !!shot, pageUrl: d.pageUrl || location.href, pagePath: pagePath() };
     submitJob(job);
   }
   function localStop() {
@@ -248,6 +259,7 @@
     if (!p) { idlePanel(); if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
     var sj = { prompt: job.prompt, file: job.file, files: job.files || [], pageUrl: job.pageUrl || location.href, pagePath: job.pagePath || pagePath(), note: job.note || '' };
     if (job.provider) sj.provider = job.provider;
+    if (job.followUp) sj.followUp = true;
     var r = await withTimeout(send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj }), 45000, 'relay_timeout');
     dwLog('submit_result', { ok: !!(r && r.ok), code: r && r.code });
     if (gen !== S.workGen || S.stopped) return;
@@ -258,6 +270,7 @@
     var msg = (['not_paired', 'busy', 'chat_tab_unreachable', 'tab_open_failed'].indexOf(code) >= 0 && DWX.providers.message(pid, code))
       || (code === 'relay_timeout' ? ('Not sent: ' + aiName(pid) + ' did not start in time.') : null)
       || (code === 'sw_unreachable' ? 'Not sent: the extension was reloaded or updated. Reload this page to reconnect it.' : null)
+      || (code === 'no_conversation' ? 'Not sent: the earlier AI chat is not open any more. Send a new edit request to start a new chat.' : null)
       || (code === 'stopped' ? null : ('Not sent (' + code + ').'));
     if (code === 'stopped') return;
     idlePanel();
@@ -275,6 +288,25 @@
       out.push({ label: String(b.label || '').slice(-300), lang: /^[A-Za-z0-9+#._-]{0,20}$/.test(String(b.lang || '')) ? String(b.lang || '').toLowerCase() : '', code: b.code });
     });
     return out;
+  }
+  // v0.1.12: files the AI made (download chips), as base64. Safe names and allowlisted types only; caps again here.
+  var ASSET_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', css: 'text/css', html: 'text/html', htm: 'text/html', js: 'text/javascript', json: 'application/json', pdf: 'application/pdf', txt: 'text/plain' };
+  function assets2(as) {
+    var out = [], total = 0;
+    (Array.isArray(as) ? as : []).slice(0, 8).forEach(function (a) {
+      if (!a || typeof a.name !== 'string' || typeof a.b64 !== 'string') return;
+      var m = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.([A-Za-z0-9]{1,5})$/.exec(a.name), mime = m && ASSET_MIME[m[1].toLowerCase()];
+      if (!mime || !/^[A-Za-z0-9+/=]+$/.test(a.b64.slice(0, 200))) return;
+      var size = Math.floor(a.b64.length * 3 / 4);
+      if (size > 10 * 1024 * 1024 || total + size > 30 * 1024 * 1024) return;
+      total += size;
+      out.push({ name: a.name, mime: mime, b64: a.b64, size: size, via: a.via === 'download' ? 'download' : 'link' });
+    });
+    return out;
+  }
+  function missed2(m) {
+    if (!m || typeof m !== 'object') return null;
+    return { tags: Math.max(0, Math.min(50, m.tags | 0)), names: (Array.isArray(m.names) ? m.names : []).slice(0, 12).map(function (x) { return { name: String(x && x.name || '').slice(0, 120), why: String(x && x.why || '').slice(0, 20) }; }) };
   }
   function files2(fs) { return (fs || []).map(function (f) { return { name: f.name, url: f.url, kind: f.kind, needsTab: !!f.needsTab }; }); }
   async function uploadSnapshot(body) {
@@ -305,13 +337,20 @@
       if (e.step === 'attach' && e.detail && typeof e.detail.pageFiles === 'number') { stepMsg.files = Math.max(0, Math.min(50, e.detail.pageFiles | 0)); stepMsg.shot = e.detail.shot !== false; }
       if (e.step === 'attach_inline' && e.detail) stepMsg.files = Math.max(0, Math.min(50, e.detail.files | 0));
       if (e.step === 'send' && e.detail && e.detail.inline) stepMsg.inline = true;
+      if (e.step === 'assets' && e.detail) { stepMsg.got = Math.max(0, Math.min(8, e.detail.got | 0)); stepMsg.missed = Math.max(0, Math.min(12, e.detail.missed | 0)); stepMsg.tags = Math.max(0, Math.min(50, e.detail.tags | 0)); }
       if (S.wantEvents) toPage('dw-ext-step', stepMsg);
     } else if (e.kind === 'chunk') {
       if (P) P.setReply(e.text, e.files);
       if (S.wantEvents) toPage('dw-ext-chunk', { jobId: msg.jobId, seq: e.seq, text: e.text, files: files2(e.files) });
     } else if (e.kind === 'done') {
       if (P) P.done(e.status);
-      if (S.wantEvents) toPage('dw-ext-done', { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files), blocks: blocks2(e.blocks) });
+      if (S.wantEvents) {
+        var dn = { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files), blocks: blocks2(e.blocks) };
+        var as2 = assets2(e.assets), ms2 = missed2(e.assetsMissed);
+        if (as2.length) dn.assets = as2;
+        if (ms2) dn.assetsMissed = ms2;
+        toPage('dw-ext-done', dn);
+      }
     } else if (e.kind === 'error') {
       var pidE = S.jobProvider || S.state.provider;
       var text = DWX.providers.message(pidE, e.code);
@@ -355,7 +394,7 @@
       else if (d.type === 'dw-ext-control' && S.active && ['pause', 'resume'].indexOf(d.action) >= 0) send({ type: 'dw:control', action: d.action });
     } else if (d.source === 'dw-edit-tap' && d.type === 'dw-ext-submit') onSubmitEvent(d, 'tap');
   });
-  ['pointerdown', 'keydown'].forEach(function (t) { document.addEventListener(t, function (e) { if (e.isTrusted) S.lastGesture = Date.now(); }, true); });
+  ['pointerdown', 'keydown'].forEach(function (t) { document.addEventListener(t, function (e) { if (e.isTrusted) { S.lastGesture = Date.now(); if (S.panel && DWX.chime) DWX.chime.unlock(); } }, true); });
 
   // ---------- start ----------
   window.addEventListener('hashchange', maybeActivate);

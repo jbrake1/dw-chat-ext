@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.12 — 2026-11-24
+
+- **Files Gemini makes are picked up.** When Gemini writes a picture (or any file) with code, it shows it as a download chip under the reply, not as a code block, so v0.1.11 staged a page that linked to images that did not exist. The extension now finds those chips (`steps.files.generated` in `instructions/gemini.json` rev 4, needs extension 0.1.12), reads the bytes through the page hook (from the chip's link, or by catching the chip's own Download click so no file lands in Downloads), checks the bytes match the file type, and sends them to the editor. The editor stages each file at the path the new page links to (or the full path the reply names). Limits: 8 files, 10 MB each, 30 MB in all.
+- **Your attached picture as a fallback.** If the reply links to an image that Gemini did not send back, the picture you attached is converted to the linked name and format and staged there.
+- **Missing files block Publish.** Before offering Publish, the editor checks every file the staged HTML/CSS links to (src, srcset, poster, link href, a href, og:image, style and CSS url(), @import). Anything that is not on the site and was not staged is listed as **MISSING** and Publish is disabled ("Publish blocked") with a **Check again** button. Links that were already broken before the edit are named but do not block.
+- **Follow-ups in the same chat.** The chat window has a follow-up box under the reply. It sends into the same ChatGPT or Gemini conversation (no New chat), can attach files or resend the page's files, and its files can fill in paths the last preview was missing. The history is kept for the tab.
+- **Completion chime.** A short sound when a reply is done and staged (a lower one if something is missing or failed). The bell in the chat window mutes it; the choice is remembered.
+- The prompt now asks the AI to name a new file after the path it links and to write the full path.
+
 ## v0.1.11 — 2026-11-24
 
 - **Larger attachments (10 MB each, 30 MB in all).** Suggest an edit was refusing a screenshot over 2 MB ("up to 10 files, 2 MB each, 6 MB in all"). The cap is now 10 MB per file and 30 MB in total, in the editor, the staged-save path, and the extension. The help text matches. PHP `post_max_size` and nginx `client_max_body_size` on the production nodes are raised from 12M to 20M so a 10 MB file posted as JSON (base64 is about 14 MB) is accepted; `upload_max_filesize` stays 10M, which is the per-file cap.

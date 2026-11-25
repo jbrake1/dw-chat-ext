@@ -32,6 +32,8 @@
 <script>
 (function () {
   var q = new URLSearchParams(location.search);
+  // jsdom has no blob URLs: a tiny stand-in so the ?chips=1 download button behaves like a browser's.
+  if (!URL.createObjectURL) { var __blobs = {}, __n = 0; URL.createObjectURL = function (b) { var u = 'blob:' + location.origin + '/b' + (++__n); __blobs[u] = b; return u; }; window.__blobUrls = __blobs; }
   var SPEED = Number(q.get('speed') || 20), NTOK = Number(q.get('tokens') || 20);
   var NOATTACH = q.get('attach') === '0', NOINPUT = false, NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0';
   window.__received = []; window.__forbidden = []; window.__menuOpened = 0; window.__newChat = 0;
@@ -147,6 +149,11 @@
         cb.querySelector('.code-block-decoration span').textContent = lang;
         cb.querySelector('code').textContent = body; md2.appendChild(cb);
       };
+      if (q.get('reply') === 'taro') {                                            // v0.1.12: the page links two pictures the model made
+        add('/index.html', 'HTML', '<!doctype html>\n<html><body><h1>Family owned since 1998</h1><picture><source type="image/webp" srcset="assets/img/hanalei-taro-1600.webp"><img src="assets/img/hanalei-taro-1600.jpg" alt="Taro"></picture></body></html>\n');
+        var tp = document.createElement('p'); tp.textContent = 'Save the new image to /assets/img/hanalei-taro-1600.webp and /assets/img/hanalei-taro-1600.jpg.'; md2.appendChild(tp);
+        return;
+      }
       add('/index.html', 'HTML', '<!doctype html>\n<html><body><h1>Family owned since 1998</h1></body></html>\n');
       add('/css/site.css', 'CSS', 'h1{color:#1f4d2b}\n');
       var tail = document.createElement('p'); tail.textContent = 'That is all.'; md2.appendChild(tail);
@@ -154,6 +161,22 @@
     send.onclick = function () { if (!streaming) return; if (timer) { clearInterval(timer); timer = null; } finish(); };
     function finish() {
       streaming = false; send.classList.remove('stop'); send.setAttribute('aria-label', 'Send message'); send.onclick = null; refresh();
+      // v0.1.12 (?chips=1): files the model "made with code", shown as download chips under the reply (best-effort mimic).
+      if (q.get('chips') === '1') {
+        var box = document.createElement('div'); box.className = 'attachment-container generated-files';
+        box.innerHTML = '<div class="file-tile"><span class="file-name">hanalei-taro-1600.webp</span><button class="dl" aria-label="Download file"><mat-icon fonticon="download">download</mat-icon></button></div>' +
+          '<div class="file-tile"><span class="file-name">hanalei-taro-1600.jpg</span><a class="open" href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==">Open</a></div>' +
+          '<div class="file-tile"><span class="file-name">notes.txt</span><button aria-label="Share notes.txt">share</button></div>';
+        var mdx = mr.querySelector('.markdown');
+        mdx.parentNode.appendChild(box);
+        var tag = document.createElement('p'); tag.textContent = '[file-tag: code-generated-file-2-1795450470]'; mdx.appendChild(tag);
+        box.querySelector('button.dl').addEventListener('click', function () {
+          window.__downloads = (window.__downloads || 0) + 1;
+          var bytes = new Uint8Array([0x52,0x49,0x46,0x46,0x10,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20,1,2,3,4]);
+          var u = URL.createObjectURL(new Blob([bytes], { type: 'image/webp' }));
+          var a = document.createElement('a'); a.href = u; a.download = 'hanalei-taro-1600.webp'; a.click();
+        });
+      }
       var acts = document.createElement('message-actions'); acts.innerHTML = '<button aria-label="Good response">up</button><button aria-label="Share &amp; export">share</button><button aria-label="Copy">copy</button>';
       mr.appendChild(acts);
     }

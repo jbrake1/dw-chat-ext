@@ -3,12 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..');
-const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
-const noServer = !fs.existsSync(path.join(root, 'server/markup/markup.js'));
+const read = (p) => fs.readFileSync(path.join(root, p === 'server/markup/markup.js' && !fs.existsSync(path.join(root, p)) ? 'mock/markup.js' : p), 'utf8');   // the public repo keeps a copy in mock/
 
-test('extension 0.1.11: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
+test('extension 0.1.12: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
   const m = JSON.parse(read('extension/manifest.json'));
-  assert.equal(m.version, '0.1.11');
+  assert.equal(m.version, '0.1.12');
   assert.ok(m.content_scripts[1].js.includes('lib/snapshot.js'));
   assert.ok(!m.content_scripts[0].js.includes('lib/snapshot.js'), 'snapshot.js is not injected on editor pages');
   const sw = read('extension/background/sw.js');
@@ -27,7 +26,7 @@ test('extension 0.1.11: snapshot is a side path and does not use /_dw/ext/report
   assert.ok(gpt.includes('DWX.pageSnapshot'));
 });
 
-test('Send page snapshot button is in the popup and on error in the chat window', { skip: noServer }, () => {
+test('Send page snapshot button is in the popup and on error in the chat window', () => {
   assert.ok(read('extension/popup/popup.html').includes('id="snap"'));
   assert.ok(read('extension/popup/popup.js').includes('popup:snapshot'));
   const panel = read('extension/content/panel.js');
@@ -44,7 +43,7 @@ test('Send page snapshot button is in the popup and on error in the chat window'
   assert.ok(!no.includes('xtSnapButton()'));
 });
 
-test('v0.1.7 relay path is still intact', { skip: noServer }, () => {
+test('v0.1.7 relay path is still intact', () => {
   const mk = read('server/markup/markup.js');
   assert.ok(mk.includes('function xtNoRelay'));
   assert.ok(mk.includes('xtWaitForRelay'));

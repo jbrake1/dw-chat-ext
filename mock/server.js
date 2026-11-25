@@ -11,7 +11,7 @@ const { signedPart } = require('../extension/lib/pass.js');
 
 function startMock(opts = {}) {
   const state = {
-    passTtl: 300, passBehavior: 'ok', instructions: null, instructionsStatus: 200, reports: [], markup: [], snapshots: [], passCalls: 0, whoamiCalls: 0,
+    passTtl: 300, passBehavior: 'ok', instructions: null, instructionsStatus: 200, reports: [], markup: [], snapshots: [], staged: [], passCalls: 0, whoamiCalls: 0,
     passKeys: crypto.generateKeyPairSync('ed25519'), signPass: false, extraRequests: []
   };
   const readBody = (req) => new Promise((res) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => res(Buffer.concat(c))); });
@@ -68,7 +68,10 @@ function startMock(opts = {}) {
     }
     if (u.pathname === '/markup/' && req.method === 'POST' && u.searchParams.get('a') === 'files') {
       // v0.1.11 tests: accept staged-save posts from markup.js so xtDone does not reject
-      return json(res, 200, { ok: true, id: 'stg' + (state.markup.length + 1), staged_on_existing: true });
+      // v0.1.12: and record them (name, folder, size, first bytes) for the download-chip scenario
+      let b = {}; try { b = JSON.parse((await readBody(req)).toString()); } catch (e) {}
+      state.staged.push({ action: b.action, staging: b.staging, file_name: b.file_name, file_path: b.file_path, text: typeof b.file_text === 'string' ? b.file_text.length : null, data: typeof b.file_data === 'string' ? b.file_data.slice(0, 16) : null });
+      return json(res, 200, { ok: true, id: 'stg' + state.staged.length, staged_on_existing: b.file_name === 'editor.html' });
     }
     if (u.pathname === '/markup/' && req.method === 'POST') {
       const body = await readBody(req);

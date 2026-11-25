@@ -6,8 +6,8 @@ importScripts('../lib/util.js', '../lib/providers/registry.js', '../lib/provider
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
 const GREEN = { 16: 'icons/green-16.png', 32: 'icons/green-32.png', 48: 'icons/green-48.png', 128: 'icons/green-128.png' };
-const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'lib/snapshot.js', 'content/chatgpt.js'];
-const DW_FILES = ['lib/util.js', 'lib/providers/registry.js', 'lib/providers/chatgpt.js', 'lib/providers/gemini.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'content/panel.js', 'content/dw.js'];
+const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/assets.js', 'lib/runner.js', 'lib/snapshot.js', 'content/chatgpt.js'];
+const DW_FILES = ['lib/util.js', 'lib/providers/registry.js', 'lib/providers/chatgpt.js', 'lib/providers/gemini.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'lib/chime.js', 'content/panel.js', 'content/dw.js'];
 const ses = chrome.storage.session, loc = chrome.storage.local;
 
 // ---------- static data ----------
@@ -36,18 +36,19 @@ const store = {
 };
 
 // ---------- session state (survives service-worker restarts, cleared when the browser closes) ----------
-const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false, stopGen: 0 };
+const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false, stopGen: 0, conv: null };
 const payloads = {}; // jobId -> {prompt, file} kept in memory only until the prompt is sent
 const iconLog = {};  // tabId -> 'green'|'grey' (debug/test visibility)
 const lastByTab = {}; // v0.1.11: last job result per DW tab, so a refresh can restore the chat
 const LAST_TTL = 30 * 60 * 1000;
 const ready = (async () => {
-  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId', 'userUnpaired', 'lastByTab']);
+  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId', 'userUnpaired', 'lastByTab', 'conv']);
+  S.conv = d.conv || null;
   S.userUnpaired = !!d.userUnpaired;
   S.pair = d.pair || null; S.tabs = d.tabs || {}; S.jobs = d.jobs || {}; S.paused = !!d.paused; S.activeJobId = d.activeJobId || null;
   if (d.lastByTab && typeof d.lastByTab === 'object') Object.assign(lastByTab, d.lastByTab);
 })();
-const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId, userUnpaired: S.userUnpaired });
+const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId, userUnpaired: S.userUnpaired, conv: S.conv });
 function lastOf(tabId) {
   const r = lastByTab[tabId];
   if (!r || Date.now() - (r.t || 0) > LAST_TTL) { delete lastByTab[tabId]; return null; }
@@ -65,7 +66,7 @@ function publicLast(rec) {
     jobId: rec.jobId, pageUrl: rec.pageUrl || '', path: rec.pagePath || '',
     status: rec.status || '', state: rec.status === 'complete' ? 'done' : rec.status,
     text: rec.text || '', files: rec.files || [], blocks: rec.blocks || [], steps: rec.steps || [],
-    note: rec.note || '', ai: rec.provider || rec.ai || '', error: rec.error || null, running: running
+    note: rec.note || '', ai: rec.provider || rec.ai || '', error: rec.error || null, running: running, conversation: !!rec.convUrl
   };
 }
 function samePage(rec, path, pageUrl) {
@@ -262,6 +263,52 @@ async function refreshInstructions(reason) {
 }
 
 // ---------- pairing ----------
+// v0.1.12: follow-ups continue the SAME AI conversation. S.conv = {siteId, url} is the conversation's own address
+// (saved when a reply finishes, kept in session storage so it survives a page refresh and a service-worker restart).
+function convKey(url) { try { const u = new URL(url); return u.origin + u.pathname.replace(/\/+$/, ''); } catch (e) { return ''; } }
+function isConvUrl(url, P) {
+  try { const u = new URL(url), n = new URL(P.newChatUrl); const a = u.pathname.replace(/\/+$/, ''), b = n.pathname.replace(/\/+$/, ''); return a !== b && a.length > 1; } catch (e) { return false; }
+}
+async function rememberConversation(job) {
+  try {
+    const tb = await chrome.tabs.get(job.gptTabId).catch(() => null);
+    const P = DWX.providers.get(job.siteId);
+    if (tb && tb.url && P && isConvUrl(tb.url, P)) { S.conv = { siteId: job.siteId, url: tb.url, t: Date.now() }; putLast(job.dwTabId, { convUrl: tb.url }); await persist(); dl('conv_saved', { provider: job.siteId }); }
+  } catch (e) {}
+}
+// The AI tab for a follow-up: the paired tab if it still shows the conversation; the conversation's address in that tab
+// if it moved; the conversation's address in a new tab if the tab is gone. No conversation to go back to: no_conversation.
+async function ensureConversationTab(providerId, dwTabId) {
+  const P = DWX.providers.get(providerId);
+  if (!P) return { ok: false, code: 'bad_provider' };
+  const cfg = await getConfig();
+  const hosts = Object.keys(cfg.aiSites).filter((h) => cfg.aiSites[h] === providerId);
+  const conv = S.conv && S.conv.siteId === providerId ? S.conv.url : '';
+  let tab = (S.pair && S.pair.siteId === providerId) ? await chrome.tabs.get(S.pair.tabId).catch(() => null) : null;
+  if (tab && !hosts.includes(hostOf(tab.url))) tab = null;
+  if (tab) {
+    if (conv && convKey(tab.url) !== convKey(conv)) {
+      try { await withTimeout(chrome.tabs.update(tab.id, { url: conv }), 10000, 'tab_open_failed'); } catch (e) { return { ok: false, code: 'tab_open_failed' }; }
+      const loaded = await waitTabComplete(tab.id, 30000);
+      dl('conv_back', { provider: providerId, ok: loaded });
+      return { ok: true, tabId: tab.id, how: 'conversation' };
+    }
+    dl('tab', { provider: providerId, how: 'followup', tab: tab.id });
+    return { ok: true, tabId: tab.id, how: 'paired' };
+  }
+  if (!conv) return { ok: false, code: 'no_conversation' };
+  const dwTab = await chrome.tabs.get(dwTabId).catch(() => null);
+  const opts = { url: conv, active: false };
+  if (dwTab) { opts.windowId = dwTab.windowId; opts.index = dwTab.index + 1; }
+  let created = null;
+  try { created = await withTimeout(chrome.tabs.create(opts), 10000, 'tab_open_failed'); } catch (e) { created = null; }
+  if (!created) return { ok: false, code: 'tab_open_failed' };
+  const loaded = await waitTabComplete(created.id, 30000);
+  dl('conv_reopened', { provider: providerId, ok: loaded });
+  const r = await pairTab(created.id);
+  if (!r.ok) return { ok: false, code: r.code || 'tab_open_failed' };
+  return { ok: true, tabId: created.id, how: 'reopened' };
+}
 async function pairTab(tabId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !tab.url) return { ok: false, code: 'no_tab' };
@@ -363,7 +410,8 @@ async function handleSubmit0(sender, msg) {
   const myGen = S.stopGen;
   // Tell the editor immediately, before any tab wait, so the feed does not sit on "Collecting page files".
   await tell(tabId, { type: 'sw:event', event: { kind: 'step', step: 'open_tab', ok: true, detail: { provider: providerId } } });
-  const pt = await ensureProviderTab(providerId, tabId);
+  const follow = j.followUp === true;
+  const pt = follow ? await ensureConversationTab(providerId, tabId) : await ensureProviderTab(providerId, tabId);
   if (S.stopGen !== myGen) return { ok: false, code: 'stopped', provider: providerId };
   if (!pt.ok) return { ok: false, code: pt.code || 'not_paired', provider: providerId };
   if (typeof j.prompt !== 'string' || !j.prompt || j.prompt.length > 20000) return { ok: false, code: 'bad_job' };
@@ -382,10 +430,11 @@ async function handleSubmit0(sender, msg) {
     if (pageFiles.length && DWX.shrinkImagesForAi) pageFiles = await DWX.shrinkImagesForAi(pageFiles);
   } catch (e) {}
   const id = newId();
-  S.jobs[id] = { id, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now(), pageUrl: j.pageUrl || '', pagePath: j.pagePath || '' };
+  if (!follow) S.conv = null;                                                   // a new request starts a new chat; its address is saved when it finishes
+  S.jobs[id] = { id, followUp: follow, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now(), pageUrl: j.pageUrl || '', pagePath: j.pagePath || '' };
   putLast(tabId, { jobId: id, pageUrl: j.pageUrl || '', pagePath: j.pagePath || '', provider: providerId, status: 'sending', text: '', files: [], blocks: [], steps: [], note: typeof j.note === 'string' ? j.note.slice(0, 5000) : '' });
   S.activeJobId = id;
-  payloads[id] = { prompt: j.prompt, file: j.file || null, files: pageFiles };
+  payloads[id] = { prompt: j.prompt, file: j.file || null, files: pageFiles, followUp: follow };
   await persist();
   await broadcast();
   if (S.stopGen !== myGen) { await finishJob(id); return { ok: false, code: 'stopped', provider: providerId }; }
@@ -454,6 +503,7 @@ async function onGptEvent(sender, msg) {
   }
   if (evt.kind === 'step' && evt.step === 'send') delete payloads[job.id];
   if (evt.kind === 'chunk') putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: 'streaming', text: evt.text || '', files: evt.files || [] });
+  if (evt.kind === 'done') await rememberConversation(job);
   if (evt.kind === 'done') putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: evt.status === 'stopped' ? 'stopped' : 'complete', text: evt.text || '', files: evt.files || [], blocks: evt.blocks || [] });
   if (evt.kind === 'step') {
     const rec = lastOf(job.dwTabId) || {};

@@ -68,5 +68,9 @@ test('manifest injects it into gemini.google.com only, in the page world, at doc
   assert.deepEqual(cs.matches, ['https://gemini.google.com/*']); assert.equal(cs.world, 'MAIN'); assert.equal(cs.run_at, 'document_start');
   const sw = fs.readFileSync(path.join(root, 'extension/background/sw.js'), 'utf8');
   assert.match(sw, /case 'gpt:hook'/); assert.match(sw, /content\/ai-hook\.js'\], world: 'MAIN'/);
-  assert.ok(!/fetch\(|XMLHttpRequest|sendMessage|chrome\./.test(fs.readFileSync(path.join(root, 'extension/content/ai-hook.js'), 'utf8')), 'the hook talks to nothing');
+  const hk = fs.readFileSync(path.join(root, 'extension/content/ai-hook.js'), 'utf8');
+  assert.ok(!/XMLHttpRequest|sendMessage|chrome\./.test(hk), 'the hook talks to nothing but the page window');
+  // v0.1.12: the only fetch is bytesOf(), used for a URL the extension asked for ('fetch') or a download it caught ('capture')
+  assert.equal((hk.match(/fetch\(/g) || []).length, 1);
+  assert.match(hk, /function bytesOf\(url\) \{\n    return fetch\(url, \{ credentials: 'include', cache: 'no-store' \}\)/);
 });

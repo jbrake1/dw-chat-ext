@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DW Chat Integration",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "minimum_chrome_version": "120",
   "description": "Sends a DW Alliance 'Suggest an edit' request (screenshot, note and the page's source files) to ChatGPT or Gemini in a tab, and shows the streamed reply next to the editor. Active only for signed-in site editors.",
   "permissions": [
@@ -58,6 +58,7 @@
         "lib/status.js",
         "lib/md.js",
         "lib/pagefiles.js",
+        "lib/chime.js",
         "content/panel.js",
         "content/dw.js"
       ],
@@ -72,6 +73,7 @@
         "lib/util.js",
         "lib/interpreter.js",
         "lib/done.js",
+        "lib/assets.js",
         "lib/runner.js",
         "lib/snapshot.js",
         "content/chatgpt.js"
