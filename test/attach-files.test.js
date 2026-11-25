@@ -24,12 +24,12 @@ test('extension: attached files use the same allowlist and caps, counted before 
   // type / path rules
   const bad = P.sanitizePageFiles([att('a.exe', '/a.exe', 'x', 'application/x-msdownload'), att('a.png', '/a.jpg', PNG, 'image/png'), att('a.png', '/markup/../a.png', PNG, 'image/png'), att('a.php', '', 'x', 'text/plain'), { name: 'a.png', path: '', dataUrl: du('image/png', PNG), attached: 'yes' }], []);
   assert.deepEqual(bad.files, []);
-  // caps: 10 files, 2 MB, 6 MB, shared with page files; attached first
+  // caps: 10 files, 10 MB, 30 MB, shared with page files; attached first
   const many = []; for (let i = 0; i < 8; i++) many.push(att('u' + i + '.png', '/i/u' + i + '.png', PNG, 'image/png'));
   const lim = P.sanitizePageFiles(many.concat([pg('a.html', '/a.html', '<html>', 'text/html'), pg('b.css', '/b.css', 'a{}', 'text/css'), pg('c.js', '/c.js', 'var a', 'text/javascript')]), []);
   assert.equal(lim.files.length, 10); assert.equal(lim.files.filter((x) => x.attached).length, 8);
   assert.deepEqual(lim.skipped, [{ path: '/c.js', reason: 'limit' }]);
-  const big = P.sanitizePageFiles([att('a.png', '/a.png', 'x'.repeat(2 * 1024 * 1024 + 1), 'image/png')], []);
+  const big = P.sanitizePageFiles([att('a.png', '/a.png', 'x'.repeat(10 * 1024 * 1024 + 1), 'image/png')], []);
   assert.deepEqual(big.skipped, [{ path: '/a.png', reason: 'too_large' }]);
   // an attached file replaces the page's own copy of the same path
   const dup = P.sanitizePageFiles([att('site.css', '/css/site.css', 'a{}', 'text/css'), pg('site-2.css', '/css/site.css', 'b{}', 'text/css')], []);

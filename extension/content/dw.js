@@ -217,6 +217,13 @@
       S.panel.setState(Object.assign({}, S.state, { active: S.active, provider: S.jobProvider, busy: true }));
       S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
     }
+    // v0.1.11: shrink large images for the AI tab only (the editor still has the original for publish).
+    if (DWX.shrinkImagesForAi) {
+      try {
+        if (job.file) job.file = (await DWX.shrinkImagesForAi([job.file]))[0];
+        if (job.files && job.files.length) job.files = await DWX.shrinkImagesForAi(job.files);
+      } catch (e) {}
+    }
     var p = await fetchPass();                               // fresh pass for every send
     dwLog('pass', { ok: !!p });
     if (gen !== S.workGen || S.stopped) return;
@@ -245,7 +252,7 @@
   function blocks2(bs) {
     var out = [], total = 0;
     (Array.isArray(bs) ? bs : []).slice(0, 12).forEach(function (b) {
-      if (!b || typeof b.code !== 'string' || b.code.length > 2 * 1024 * 1024 || total + b.code.length > 6 * 1024 * 1024) return;
+      if (!b || typeof b.code !== 'string' || b.code.length > 10 * 1024 * 1024 || total + b.code.length > 30 * 1024 * 1024) return;
       total += b.code.length;
       out.push({ label: String(b.label || '').slice(-300), lang: /^[A-Za-z0-9+#._-]{0,20}$/.test(String(b.lang || '')) ? String(b.lang || '').toLowerCase() : '', code: b.code });
     });

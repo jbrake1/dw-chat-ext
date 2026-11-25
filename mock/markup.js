@@ -288,7 +288,7 @@
 
   // ----- page source files (v0.1.3) -----
   var XT_FILES_KEY = 'dw_ext_files';
-  var XT_LIM = { files: 10, file: 2 * 1024 * 1024, total: 6 * 1024 * 1024, images: 4, ms: 10000 };
+  var XT_LIM = { files: 10, file: 10 * 1024 * 1024, total: 30 * 1024 * 1024, images: 4, ms: 10000 };
   var XT_MIME = { html: 'text/html', htm: 'text/html', css: 'text/css', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', txt: 'text/plain' };
   var XT_OURS = /^\/(?:markup\/|_dw\/|affiliates?\/keep-ref\.js$|files\/)/;
   function xtFilesOn() { try { return localStorage.getItem(XT_FILES_KEY) !== '0'; } catch (e) { return true; } }
@@ -353,10 +353,10 @@
     var name = xtAttName(f.name), ext = xtExt(name);
     if (!name || !XT_MIME[ext]) return 'is not a supported type (html, css, js, json, svg, png, jpg, gif, webp, pdf, txt)';
     if (!f.size) return 'is empty';
-    if (f.size > XT_LIM.file) return 'is over 2 MB';
+    if (f.size > XT_LIM.file) return 'is over ' + Math.round(XT_LIM.file / 1024 / 1024) + ' MB';
     if (XT_ATT.length >= XT_LIM.files) return 'is over the limit of ' + XT_LIM.files + ' files';
     var total = XT_ATT.reduce(function (n, a) { return n + a.size; }, 0);
-    if (total + f.size > XT_LIM.total) return 'would pass the 6 MB total';
+    if (total + f.size > XT_LIM.total) return 'would pass the ' + Math.round(XT_LIM.total / 1024 / 1024) + ' MB total';
     var used = {}; XT_ATT.forEach(function (a) { used[a.name] = 1; });
     var nm = name, k = 2, dot = name.lastIndexOf('.');
     while (used[nm]) nm = name.slice(0, dot) + '-' + (k++) + name.slice(dot);
@@ -398,7 +398,7 @@
       box.appendChild(chip);
     });
     if (ui.attMsg) ui.attMsg.textContent = msg || '';
-    if (ui.attHint) ui.attHint.textContent = XT_ATT.length ? XT_ATT.length + ' attached. They go to the AI with your screenshot. A file with a path can be added to the site from the AI\u2019s reply, as a preview first.' : 'Add your own images, HTML, CSS, JS, JSON, SVG, PDF or text files (up to ' + XT_LIM.files + ' files, 2 MB each, 6 MB in all). Or drop them here.';
+    if (ui.attHint) ui.attHint.textContent = XT_ATT.length ? XT_ATT.length + ' attached. They go to the AI with your screenshot. A file with a path can be added to the site from the AI\u2019s reply, as a preview first.' : 'Add your own images, HTML, CSS, JS, JSON, SVG, PDF or text files (up to ' + XT_LIM.files + ' files, ' + Math.round(XT_LIM.file / 1024 / 1024) + ' MB each, ' + Math.round(XT_LIM.total / 1024 / 1024) + ' MB in all). Or drop them here.';
   }
   function xtHasFiles(e) { var t = e && e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0; }
   function xtDragOver(e) { if (!xtHasFiles(e) || !ui.note) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; ui.note.classList.add('drag'); }

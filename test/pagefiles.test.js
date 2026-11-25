@@ -98,3 +98,19 @@ test('runner still attaches page files with the paste fallback (no file input)',
   assert.equal(res.ok, true);
   assert.deepEqual(win.__received[0].files.map((x) => x.name), ['markup.jpg', 'index.html']);
 });
+
+test('v0.1.11: shrinkImagesForAi leaves text and small images alone, and is a no-op without a canvas', async () => {
+  const P = require('../extension/lib/pagefiles.js');
+  const b64 = (s) => Buffer.from(s, 'latin1').toString('base64');
+  const du = (mime, body) => 'data:' + mime + ';base64,' + b64(body);
+  const small = { name: 'logo.png', type: 'image/png', size: 20, dataUrl: du('image/png', '\x89PNG\r\n\x1a\n0000') };
+  const css = { name: 'site.css', type: 'text/css', size: 3, dataUrl: du('text/css', 'a{}') };
+  const big = { name: 'shot.png', type: 'image/png', size: P.AI_IMAGE_LIMITS.maxBytes + 1, dataUrl: du('image/png', 'x'.repeat(P.AI_IMAGE_LIMITS.maxBytes + 1)) };
+  const out = await P.shrinkImagesForAi([small, css, big]);
+  assert.equal(out[0], small);
+  assert.equal(out[1], css);
+  // Node has no createImageBitmap: the original 10 MB-capable file is returned unchanged (the browser path shrinks it).
+  assert.equal(out[2], big);
+  assert.equal(P.PAGE_FILE_LIMITS.maxFileBytes, 10 * 1024 * 1024);
+  assert.equal(P.PAGE_FILE_LIMITS.maxTotalBytes, 30 * 1024 * 1024);
+});

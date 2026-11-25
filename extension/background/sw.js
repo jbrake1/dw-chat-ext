@@ -340,6 +340,11 @@ async function handleSubmit0(sender, msg) {
     if (chk.files.length !== j.files.length) return { ok: false, code: 'bad_job' };
     pageFiles = chk.files.map((f) => ({ name: f.name, type: f.type, dataUrl: f.dataUrl }));
   }
+  // v0.1.11: shrink large images for the AI tab (originals stay on the editor for publish). Best-effort.
+  try {
+    if (j.file && DWX.shrinkImagesForAi) j.file = (await DWX.shrinkImagesForAi([j.file]))[0];
+    if (pageFiles.length && DWX.shrinkImagesForAi) pageFiles = await DWX.shrinkImagesForAi(pageFiles);
+  } catch (e) {}
   const id = newId();
   S.jobs[id] = { id, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now() };
   S.activeJobId = id;

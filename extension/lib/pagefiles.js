@@ -8,7 +8,7 @@
   else { root.DWX = root.DWX || {}; Object.assign(root.DWX, api); }
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
-  var LIMITS = { maxFiles: 10, maxFileBytes: 2 * 1024 * 1024, maxTotalBytes: 6 * 1024 * 1024, maxSkipped: 20 };
+  var LIMITS = { maxFiles: 10, maxFileBytes: 10 * 1024 * 1024, maxTotalBytes: 30 * 1024 * 1024, maxSkipped: 20 };
   // extension -> mime. The mime sent to the chat is always taken from this table, never from the page.
   var TYPES = {
     html: 'text/html', htm: 'text/html', css: 'text/css', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json',
@@ -28,6 +28,65 @@
     var n = b64.length; if (!n) return 0;
     var pad = b64.charAt(n - 1) === '=' ? (b64.charAt(n - 2) === '=' ? 2 : 1) : 0;
     return Math.floor(n * 3 / 4) - pad;
+  }
+  // v0.1.11: large images (a macOS screenshot is often well over 2 MB) are re-encoded for the AI tab only.
+  // The editor keeps the original for staging/publish. Target: JPEG, longest side 2048, under 2 MB.
+  var AI_IMG = { maxBytes: 2 * 1024 * 1024, maxSide: 2048 };
+  function blobFromDataUrl(dataUrl) {
+    var m = /^data:([^;]+);base64,([A-Za-z0-9+/]+=?=?)$/.exec(dataUrl || '');
+    if (!m) return null;
+    var bin = atob(m[2]), u = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return new Blob([u], { type: m[1] });
+  }
+  function canvasToJpeg(bitmap, side, quality) {
+    var w = bitmap.width, h = bitmap.height;
+    var scale = Math.min(1, side / Math.max(1, w, h));
+    var dw = Math.max(1, Math.round(w * scale)), dh = Math.max(1, Math.round(h * scale));
+    if (typeof OffscreenCanvas === 'function') {
+      var oc = new OffscreenCanvas(dw, dh);
+      oc.getContext('2d').drawImage(bitmap, 0, 0, dw, dh);
+      return oc.convertToBlob({ type: 'image/jpeg', quality: quality });
+    }
+    if (typeof document !== 'undefined' && document.createElement) {
+      var el = document.createElement('canvas'); el.width = dw; el.height = dh;
+      el.getContext('2d').drawImage(bitmap, 0, 0, dw, dh);
+      return new Promise(function (res, rej) { el.toBlob(function (b) { b ? res(b) : rej(new Error('toBlob')); }, 'image/jpeg', quality); });
+    }
+    return Promise.reject(new Error('no canvas'));
+  }
+  function shrinkOneForAi(f) {
+    if (!f || !/^image\/(png|jpeg|gif|webp)$/.test(f.type || '')) return Promise.resolve(f);
+    if ((f.size || 0) <= AI_IMG.maxBytes) return Promise.resolve(f);
+    if (typeof createImageBitmap !== 'function') return Promise.resolve(f);
+    var blob = blobFromDataUrl(f.dataUrl);
+    if (!blob) return Promise.resolve(f);
+    return createImageBitmap(blob).then(function (bmp) {
+      var side = AI_IMG.maxSide, q = 0.85;
+      function step() {
+        return canvasToJpeg(bmp, side, q).then(function (b) {
+          if (b.size <= AI_IMG.maxBytes || (side <= 800 && q <= 0.5)) return b;
+          if (q > 0.55) q = 0.55; else side = Math.max(800, Math.round(side * 0.7));
+          return step();
+        });
+      }
+      return step().then(function (b) {
+        try { if (bmp.close) bmp.close(); } catch (e) {}
+        if (!b || b.size >= (f.size || 0)) return f;
+        return new Promise(function (res) {
+          var fr = new FileReader();
+          fr.onload = function () {
+            var name = String(f.name || 'image').replace(/\.[A-Za-z0-9]{1,5}$/, '') + '.jpg';
+            res(Object.assign({}, f, { name: name, type: 'image/jpeg', size: b.size, dataUrl: String(fr.result) }));
+          };
+          fr.onerror = function () { res(f); };
+          fr.readAsDataURL(b);
+        });
+      });
+    }).catch(function () { return f; });
+  }
+  function shrinkImagesForAi(files) {
+    return Promise.all((Array.isArray(files) ? files : []).map(shrinkOneForAi));
   }
   function uniqueName(name, used) {
     if (!used[name]) { used[name] = 1; return name; }
@@ -96,5 +155,5 @@
     }
     return lines.join('\n');
   }
-  return { PAGE_FILE_LIMITS: LIMITS, PAGE_FILE_TYPES: TYPES, sanitizePageFiles: sanitizePageFiles, filesPrompt: filesPrompt };
+  return { PAGE_FILE_LIMITS: LIMITS, AI_IMAGE_LIMITS: AI_IMG, shrinkImagesForAi: shrinkImagesForAi, shrinkOneForAi: shrinkOneForAi, PAGE_FILE_TYPES: TYPES, sanitizePageFiles: sanitizePageFiles, filesPrompt: filesPrompt };
 });

@@ -469,7 +469,7 @@
 
   // v0.1.4: the code blocks of the newest reply, in order, each with the text just before it (where the model writes
   // "File: /path"). Read once, when the reply is done. Code comes from the <code> element (no "Copy code" header).
-  var BLOCK_LIM = { blocks: 12, code: 2 * 1024 * 1024, total: 6 * 1024 * 1024, label: 300 };
+  var BLOCK_LIM = { blocks: 12, code: 10 * 1024 * 1024, total: 30 * 1024 * 1024, label: 300 };
   function readBlocks(win, doc, instr, baseline) {
     var steps = instr.steps, out = [], total = 0;
     var msgs = resolveAll(doc, steps.assistantMessage.selectors).els;
