@@ -3,6 +3,7 @@
 ## v0.1.11 — 2026-11-24
 
 - **Larger attachments (10 MB each, 30 MB in all).** Suggest an edit was refusing a screenshot over 2 MB ("up to 10 files, 2 MB each, 6 MB in all"). The cap is now 10 MB per file and 30 MB in total, in the editor, the staged-save path, and the extension. The help text matches. PHP `post_max_size` and nginx `client_max_body_size` on the production nodes are raised from 12M to 20M so a 10 MB file posted as JSON (base64 is about 14 MB) is accepted; `upload_max_filesize` stays 10M, which is the per-file cap.
+- **Chat history survives a refresh.** The editor feed and the last reply’s code blocks are saved per page in this tab. After a reload the chat comes back, including Publish and Discard when a preview was staged (or can still be staged from the saved blocks). The extension keeps the last job result and, if the AI tab already finished, can re-read that reply.
 - **Large images are resized for the AI only.** A big PNG (a typical macOS screenshot) is re-encoded as a JPEG under 2 MB, longest side 2048, before it is attached in the ChatGPT or Gemini tab. The original file is what is staged and published.
 
 ## v0.1.10 — 2026-11-24

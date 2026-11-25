@@ -300,3 +300,21 @@ test('v0.1.10: the whole-page reply (code block or raw paragraphs) matches the s
   const frag = (await runReply('reply=rawfrag')).done;
   assert.deepEqual(M.xtUpdatesFrom(frag, SENT), []);
 });
+
+test('v0.1.11: peek (baseline = last message) re-reads a finished Gemini reply and its recovered HTML block', async () => {
+  const I2 = require('../extension/lib/interpreter.js');
+  const win = await mockGemini('?speed=3&tokens=8&reply=rawdoc');
+  const { ev, emit } = collect();
+  const res = await runJob(win, fast(), JOB(), { emit }).promise;
+  assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
+  const instr = geminiInstr();
+  const n = I2.countMessages(win.document, instr);
+  assert.ok(n >= 1);
+  const baseline = Math.max(0, n - 1);
+  const st = I2.readState(win, win.document, instr, baseline, null);
+  const blocks = I2.readBlocks(win, win.document, instr, baseline);
+  assert.match(st.text, /```html/);
+  assert.match(st.text, /That is all/);
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0].code, /<!doctype html>/i);
+});

@@ -96,6 +96,7 @@
       scheduleRenew(p);
       toPage('dw-ext-ready', { paired: !!S.state.paired });
       emitStatus();
+      replayLast();
       editorFallback();
       // Give a page that implements the hook time to answer with dw-ext-hello; only then fall back to the fetch tap.
       if (!S.tapTimer) S.tapTimer = setTimeout(function () {
@@ -120,6 +121,22 @@
         dwLog('editorFallback', {});
       } catch (e) {}
     }, 3000);
+  }
+  function replayLast() {
+    // v0.1.11: after a reload, restore the last reply for this page (kept by the service worker, or re-read from the AI tab).
+    return send({ type: 'dw:lastResult', pageUrl: location.href, path: pagePath() }).then(function (r) {
+      if (!r || !r.ok || !r.result) return;
+      var rec = r.result;
+      if (S.panel && rec.text) {
+        S.panel.setReply(rec.text, rec.files);
+        if (rec.status === 'complete' || rec.status === 'stopped') S.panel.done(rec.status === 'stopped' ? 'stopped' : 'complete');
+      }
+      toPage('dw-ext-restore', {
+        ok: true, jobId: rec.jobId, path: rec.path || rec.pagePath || pagePath(), pageUrl: rec.pageUrl,
+        status: rec.status, state: rec.state, text: rec.text, files: files2(rec.files), blocks: blocks2(rec.blocks),
+        steps: rec.steps, note: rec.note, ai: rec.ai || rec.provider, error: rec.error, running: !!rec.running
+      });
+    }).catch(function () {});
   }
   function scheduleRenew(p) {
     if (S.renewTimer) clearTimeout(S.renewTimer);
@@ -159,6 +176,7 @@
 
   // ---------- submit ----------
   var DATA_URL = /^data:image\/(jpeg|png|webp);base64,/;
+  function pagePath() { var p = location.pathname || '/'; return p.slice(-1) === '/' ? p + 'index.html' : p; }
   function buildPrompt(d) {
     var t = (S.cfg.promptTemplate || '{note}');
     return t.replace('{host}', location.hostname).replace('{pageUrl}', String(d.pageUrl || location.href)).replace('{note}', String(d.note || '(no note)'));
@@ -187,7 +205,7 @@
     var prompt = buildPrompt({ note: note, pageUrl: d.pageUrl }) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
     // v0.1.6: the editor may name the AI (dw-ext-submit provider: 'chatgpt' | 'gemini'); anything else is ignored.
     var provider = (via === 'native' && DWX.providers.valid(d.provider)) ? d.provider : null;
-    var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot };
+    var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot, pageUrl: d.pageUrl || location.href, pagePath: pagePath() };
     submitJob(job);
   }
   function localStop() {
@@ -228,7 +246,7 @@
     dwLog('pass', { ok: !!p });
     if (gen !== S.workGen || S.stopped) return;
     if (!p) { idlePanel(); if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
-    var sj = { prompt: job.prompt, file: job.file, files: job.files || [] };
+    var sj = { prompt: job.prompt, file: job.file, files: job.files || [], pageUrl: job.pageUrl || location.href, pagePath: job.pagePath || pagePath(), note: job.note || '' };
     if (job.provider) sj.provider = job.provider;
     var r = await withTimeout(send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj }), 45000, 'relay_timeout');
     dwLog('submit_result', { ok: !!(r && r.ok), code: r && r.code });
@@ -319,6 +337,10 @@
         // activate() already posts ready once; this hello is answered with status only.
         if (!S.active && candidate()) maybeActivate();
         replyStatus();
+        if (S.active) replayLast();
+      } else if (d.type === 'dw-ext-replay') {
+        if (S.active) replayLast();
+        else if (candidate()) maybeActivate();
       } else if (d.type === 'dw-ext-status') {
         if (!S.active && candidate()) maybeActivate();
         replyStatus();

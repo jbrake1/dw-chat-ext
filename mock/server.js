@@ -50,6 +50,7 @@ function startMock(opts = {}) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'ETag': etag }); return res.end(body);
     }
     if (u.pathname === '/home-prod.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(fs.readFileSync(path.join(__dirname, 'home-prod.html'))); }   // v0.1.10: a saved copy of a real full-bleed-hero page
+    if (u.pathname === '/editor.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(fs.readFileSync(path.join(__dirname, 'real-editor.html'))); }  // v0.1.11: real markup.js (not the inline mock on /)
     if (u.pathname === '/_dw/edit.js') { res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end(fs.readFileSync(path.join(__dirname, 'edit.js'))); }
     if (u.pathname === '/markup/markup.js') { res.writeHead(200, { 'Content-Type': 'application/javascript' }); const sp = path.join(__dirname, '../server/markup/markup.js'); return res.end(fs.readFileSync(fs.existsSync(sp) ? sp : path.join(__dirname, 'markup.js'))); }
     if (u.pathname === '/markup/vendor/html2canvas.min.js') { res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end("window.html2canvas=function(el,o){var c=document.createElement('canvas');c.width=Math.max(1,(o&&o.width)||800);c.height=Math.max(1,(o&&o.height)||600);return Promise.resolve(c);};"); }
@@ -64,6 +65,10 @@ function startMock(opts = {}) {
       const id = 's' + crypto.randomBytes(4).toString('hex');
       state.snapshots.push({ id, provider: body.provider, host: body.host, bytes: raw.length, selectorCount: Array.isArray(body.selectors) ? body.selectors.length : 0, hasSecret: /SECRET/.test(raw), hasQuery: /[?]/.test(String(body.host || '')) });
       return json(res, 200, { ok: true, id });
+    }
+    if (u.pathname === '/markup/' && req.method === 'POST' && u.searchParams.get('a') === 'files') {
+      // v0.1.11 tests: accept staged-save posts from markup.js so xtDone does not reject
+      return json(res, 200, { ok: true, id: 'stg' + (state.markup.length + 1), staged_on_existing: true });
     }
     if (u.pathname === '/markup/' && req.method === 'POST') {
       const body = await readBody(req);

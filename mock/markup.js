@@ -150,7 +150,108 @@
     if (Date.now() - log[start].t > 30 * 60000) return null;
     return { idx: start, last: lastStep || 'collecting files' };
   }
+  // v0.1.11: the editor feed and the last reply's code blocks, per page, in this tab (sessionStorage).
+  // A refresh remounts the chat. Large screenshots are not stored (quota). The extension also keeps the last job
+  // result and can re-read the AI tab if the reply finished after this page was gone.
+  var XT_FEED_KEY = 'dw_ext_feed', XT_FEED_TTL = 30 * 60 * 1000;
+  function xtFeedStoreKey() { return XT_FEED_KEY + ':' + xtPagePath(); }
+  function xtSentLite(sent) {
+    return (Array.isArray(sent) ? sent : []).map(function (f) {
+      var row = { path: f.path, name: f.name, base: f.base || xtBase(f.path || f.name || ''), kind: f.kind, page: !!f.page };
+      if (f.attach) row.attach = true;
+      if (typeof f.text === 'string' && f.text.length <= 200000) row.text = f.text;
+      return row;
+    });
+  }
+  function xtFeedStepsSnap() {
+    var steps = [];
+    if (XT.feedSteps) {
+      Array.prototype.forEach.call(XT.feedSteps.querySelectorAll('.step'), function (row) {
+        steps.push({ name: row.getAttribute('data-step') || '', ok: row.getAttribute('data-ok') === '1', label: (row.textContent || '').replace(/^\u2713 /, '') });
+      });
+    }
+    return steps;
+  }
+  function xtFeedRecordGet() {
+    try {
+      var v = JSON.parse(sessionStorage.getItem(xtFeedStoreKey()) || 'null');
+      if (!v || v.v < 1 || v.path !== xtPagePath() || !v.t || Date.now() - v.t > XT_FEED_TTL) return null;
+      return v;
+    } catch (e) { return null; }
+  }
+  function xtFeedRecordSet(v) {
+    if (!v) { try { sessionStorage.removeItem(xtFeedStoreKey()); } catch (e) {} return; }
+    var o = {
+      v: 1, path: xtPagePath(), t: Date.now(), ai: v.ai || XT.ai || '', jobId: v.jobId || XT.job || null,
+      note: String(v.note || '').slice(0, 5000), steps: Array.isArray(v.steps) ? v.steps.slice(0, 40) : xtFeedStepsSnap(),
+      state: v.state || '', text: String(v.text || ''), files: Array.isArray(v.files) ? v.files.slice(0, 20) : [],
+      blocks: Array.isArray(v.blocks) ? v.blocks.slice(0, 12) : [], status: v.status || '',
+      error: v.error ? { code: String(v.error.code || '').slice(0, 80), step: String(v.error.step || '').slice(0, 40) } : null,
+      sent: xtSentLite(v.sent || XT.sent)
+    };
+    try { sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
+    catch (e) {
+      try { o.sent = (o.sent || []).map(function (f) { return { path: f.path, name: f.name, base: f.base, kind: f.kind, page: !!f.page, attach: !!f.attach }; }); sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
+      catch (e2) { try { delete o.files; sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); } catch (e3) {} }
+    }
+  }
+  function xtFeedPersist(extra) {
+    var rec = Object.assign({}, XT.feedRec || {}, extra || {});
+    if (XT.feed) rec.state = XT.feed.getAttribute('data-state') || rec.state;
+    if (XT.feedReply) rec.text = XT.feedReply.getAttribute('data-plain') || rec.text;
+    rec.steps = xtFeedStepsSnap();
+    rec.ai = XT.ai || rec.ai;
+    rec.jobId = XT.job || rec.jobId;
+    rec.sent = XT.sent || rec.sent;
+    if (!rec.note && XT.feedScroll) {
+      var n = XT.feedScroll.querySelector('[data-role=feed-note]');
+      if (n) rec.note = n.textContent;
+    }
+    XT.feedRec = rec;
+    xtFeedRecordSet(rec);
+  }
+  function xtFeedPersistDone(d) {
+    xtFeedPersist({ text: d && d.text, files: d && d.files, blocks: d && d.blocks, status: (d && d.status) || 'complete', state: (d && d.status === 'stopped') ? 'stopped' : 'done' });
+  }
+  function xtAskReplay() {
+    if (XT.askedReplay) return;
+    XT.askedReplay = true;
+    xtPost('dw-ext-replay', { pageUrl: location.href, path: xtPagePath() });
+    setTimeout(function () { if (!XT.feed || !XT.feed.querySelector('[data-role=feed-user],[data-role=reply]')) xtRestoreRelayNote(); }, 2500);
+  }
+  function xtRestoreFeed(fromExt) {
+    var v = fromExt && (fromExt.text || fromExt.note || (fromExt.blocks && fromExt.blocks.length) || fromExt.status) ? fromExt : xtFeedRecordGet();
+    if (!v) return false;
+    if (v.path && v.path !== xtPagePath()) return false;
+    var haveDone = XT.feed && XT.feed.querySelector('[data-role=reply][data-done=complete]');
+    var incoming = fromExt && fromExt.status === 'complete' && fromExt.text && String(fromExt.text).length;
+    var haveLen = (XT.feedReply && XT.feedReply.getAttribute('data-plain') || '').length;
+    if (haveDone && !(incoming && incoming > haveLen)) {
+      if (fromExt && fromExt.status === 'complete' && !xtStagedGet() && (fromExt.blocks || fromExt.text)) {
+        if (v.sent && v.sent.length) XT.sent = v.sent;
+        xtDone({ status: 'complete', text: fromExt.text, files: fromExt.files, blocks: fromExt.blocks });
+      }
+      return true;
+    }
+    if (v.ai && XT_AI[v.ai]) XT.ai = v.ai;
+    if (v.sent && v.sent.length) XT.sent = v.sent;
+    if (v.jobId && (v.status === 'streaming' || v.status === 'sending' || v.state === 'streaming' || v.state === 'sending' || v.running)) XT.job = v.jobId;
+    xtFeedUser(v.note || '(no note)', null);
+    (v.steps || []).forEach(function (s) { if (s && (s.name || s.label)) xtFeedAddStep(s.name || 'step', !!s.ok, s.label || xtFeedLabel(s.name || '')); });
+    var text = v.text || '', files = v.files || [], blocks = v.blocks || [], status = v.status || '';
+    if (text || (blocks && blocks.length)) {
+      if (status === 'complete' || status === 'stopped' || v.state === 'done' || v.state === 'stopped') xtFeedDone({ text: text, files: files, blocks: blocks, status: status || 'complete' });
+      else xtFeedChunk(text, files);
+    }
+    if (v.error && v.error.code) xtFeedError(v.error.code, v.error.step, v.error);
+    XT.feedRec = { note: v.note, text: text, files: files, blocks: blocks, status: status, state: v.state, ai: XT.ai, jobId: v.jobId, sent: XT.sent };
+    xtFeedRecordSet(XT.feedRec);
+    if ((status === 'complete' || v.state === 'done') && !xtStagedGet()) xtDone({ status: 'complete', text: text, files: files, blocks: blocks });
+    xtLog('feed_restored', { state: v.state || status, hasText: !!text, from: fromExt ? 'ext' : 'store' });
+    return true;
+  }
   function xtRestoreRelayNote() {
+    if (XT.feed && XT.feed.querySelector('[data-role=feed-user],[data-role=reply]')) return;
     var u = xtUnfinished();
     if (!u) return;
     try { var log = xtLogGet(); log[u.idx].shown = 1; sessionStorage.setItem(XT_LOG_KEY, JSON.stringify(log)); } catch (e) {}
@@ -233,12 +334,13 @@
       return;
     }
     if (d.source !== 'dw-ext') return;
-    if (d.type === 'dw-ext-ready') { XT.active = true; XT.paired = !!d.paired; if (!XT.acked) { XT.acked = true; xtHello(); } }
-    else if (d.type === 'dw-ext-status') { xtApplyStatus(xtParseStatus(d)); }
+    if (d.type === 'dw-ext-ready') { XT.active = true; XT.paired = !!d.paired; if (!XT.acked) { XT.acked = true; xtHello(); } xtAskReplay(); }
+    else if (d.type === 'dw-ext-status') { xtApplyStatus(xtParseStatus(d)); xtAskReplay(); }
+    else if (d.type === 'dw-ext-restore') { xtRestoreFeed(d); }
     else if (d.type === 'dw-ext-inactive') { XT.active = false; XT.acked = false; xtApplyStatus({ extVersion: (XT.last && XT.last.extVersion) || '', paired: false, ai: null, revision: null, editor: false }); }
     else if (d.type === 'dw-ext-step') { if (XT.aborted) return; xtHeardRelay(); xtFeedStep(d.step, d.ok !== false, d); }
     else if (d.type === 'dw-ext-chunk') { if (XT.aborted) return; if (XT.job === null || XT.job === d.jobId) { XT.job = d.jobId; xtHeardRelay(); xtFeedChunk(d.text, d.files); } }
-    else if (d.type === 'dw-ext-done') { XT.job = null; xtHeardRelay(); if (d && d.status === 'stopped') xtFeedStopped(); else { if (XT.aborted) return; xtFeedDone(d); xtDone(d); } }
+    else if (d.type === 'dw-ext-done') { XT.job = null; xtHeardRelay(); if (d && d.status === 'stopped') xtFeedStopped(); else { if (XT.aborted) return; xtFeedDone(d); xtFeedPersistDone(d); xtDone(d); } }
     else if (d.type === 'dw-ext-error') { XT.job = null; xtHeardRelay(); if (XT.aborted) return; xtFeedError(d.code, d.step, d); }
   });
   xtHello();
@@ -659,6 +761,8 @@
       } catch (e) {}
     }
     row.appendChild(el('div', { class: 'txt', 'data-role': 'feed-note' }, note || '(no note)'));
+    XT.feedRec = { note: note || '(no note)', ai: XT.ai, state: 'sending', sent: XT.sent };
+    xtFeedRecordSet(XT.feedRec);
     XT.feedScroll.appendChild(row);
     XT.feedSteps = el('div', { class: 'steps', 'data-role': 'feed-steps' });
     XT.feedScroll.appendChild(XT.feedSteps);
@@ -713,6 +817,8 @@
     xtMd(text, XT.feedReply);
     // keep a plain-text copy for tests that read textContent of [data-role=reply]
     XT.feedReply.setAttribute('data-plain', String(text || ''));
+    if (XT.feedPersistT) clearTimeout(XT.feedPersistT);
+    XT.feedPersistT = setTimeout(function () { XT.feedPersistT = null; xtFeedPersist({ text: text, files: files, state: 'streaming', status: 'streaming' }); }, 250);
     XT.feedFiles.textContent = '';
     (files || []).forEach(function (f) {
       if (f && !f.needsTab && f.url && /^https:/i.test(f.url)) {
@@ -929,6 +1035,7 @@
       if (k !== 'img' && k !== 'pdf' && f.dataUrl) row.text = xtDecodeText(f.dataUrl);
     });
     XT.sent = sent.filter(function (s) { return s.kind; });
+    if (typeof xtFeedPersist === 'function') xtFeedPersist({ sent: XT.sent });
   }
   // The /files name and folder for a page path. On the app host pages live under /<brand>/, which is not part of the folder.
   function xtTargetOf(path) {
@@ -956,10 +1063,21 @@
   // What is staged in this tab (survives the reload that shows the preview): {exp: ms, items: [{id, path, isNew}]}.
   var XT_STAGED_KEY = 'dw_ext_staged';
   var XT_TTL = 10 * 60 * 1000;
+  function xtStagedStoreKey() { return XT_STAGED_KEY + ':' + xtPagePath(); }
   function xtStagedGet() {
-    try { var v = JSON.parse(sessionStorage.getItem(XT_STAGED_KEY) || 'null'); return v && Array.isArray(v.items) && v.items.length && v.exp > Date.now() ? v : null; } catch (e) { return null; }
+    try {
+      var raw = sessionStorage.getItem(xtStagedStoreKey()) || sessionStorage.getItem(XT_STAGED_KEY);
+      var v = JSON.parse(raw || 'null');
+      return v && Array.isArray(v.items) && v.items.length && v.exp > Date.now() ? v : null;
+    } catch (e) { return null; }
   }
-  function xtStagedSet(v) { try { if (v && v.items.length) sessionStorage.setItem(XT_STAGED_KEY, JSON.stringify(v)); else sessionStorage.removeItem(XT_STAGED_KEY); } catch (e) {} }
+  function xtStagedSet(v) {
+    try {
+      if (v && v.items.length) sessionStorage.setItem(xtStagedStoreKey(), JSON.stringify(v));
+      else sessionStorage.removeItem(xtStagedStoreKey());
+      sessionStorage.removeItem(XT_STAGED_KEY); // migrate off the pre-v0.1.11 tab-global key
+    } catch (e) {}
+  }
   function xtLeft(ms) { var s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
   function xtTick(stopAt) {
     if (XT.cdTimer) { clearInterval(XT.cdTimer); XT.cdTimer = null; }
@@ -1054,7 +1172,7 @@
   fetch(q('?a=status'), { credentials: 'same-origin', cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) {
-      if (j && j.ok && j.show && j.csrf) { hint(true); csrf = j.csrf; XT.app = j.app === true; mountButton(); xtRestoreStaged(); xtRestoreRelayNote(); }
+      if (j && j.ok && j.show && j.csrf) { hint(true); csrf = j.csrf; XT.app = j.app === true; mountButton(); xtRestoreStaged(); xtRestoreFeed(); xtAskReplay(); }
       else if (j && j.ok) { hint(false); }
       if (j && j.ok && !j.show && location.hash === '#suggest-edit') {
         location.href = q('?a=signin') + '&return=' + encodeURIComponent(location.pathname + location.search + '#suggest-edit');

@@ -39,6 +39,18 @@
         try { sendResponse(DWX.pageSnapshot(window, msg.instr || {})); }
         catch (e) { sendResponse({ ok: false, code: 'snapshot_failed' }); }
         break;
+      case 'gpt:peek':
+        // v0.1.11: re-read the last assistant reply (and its code blocks) after the DW page was reloaded.
+        // Read-only: never starts, stops or changes a job, and never sends anything in the composer.
+        try {
+          var instr = msg.instr || {};
+          var n = (DWX.countMessages && DWX.countMessages(document, instr)) || 0;
+          var baseline = Math.max(0, n - 1);
+          var st = DWX.readState(window, document, instr, baseline, null);
+          var blocks = DWX.readBlocks(window, document, instr, baseline) || [];
+          sendResponse({ ok: !!(st && (st.text || (blocks && blocks.length))), text: (st && st.text) || '', files: (st && st.files) || [], blocks: blocks });
+        } catch (e) { sendResponse({ ok: false, code: 'peek_failed' }); }
+        break;
       case 'gpt:control':
         if (!current || current.jobId !== msg.jobId) { sendResponse({ ok: false }); break; }
         if (msg.action === 'stop') current.ctl.stop();

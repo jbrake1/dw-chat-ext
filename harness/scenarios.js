@@ -62,15 +62,28 @@ async function lastAssistantText(env) {
 // One full request through the DW editor. Returns after done/error is visible in the panel.
 async function sendAndWait(env, c, o = {}) {
   const dw = env.dwPage;
-  await dw.waitForSelector('#dw-ext-root, #dw-ext-feed', { state: 'attached', timeout: 15000 });
+  await dw.waitForSelector('#dw-ext-root, #dw-ext-feed, #dw-markup-root', { state: 'attached', timeout: 15000 });
   await L.installRecorder(dw);
+  // v0.1.11: after a reload the restored reply already has data-done=complete; mark it so a new job (even with the same text) is not mistaken for that restore.
+  await dw.evaluate(() => {
+    const roots = [document.getElementById('dw-ext-feed'), document.getElementById('dw-ext-root')].map((h) => h && h.shadowRoot).filter(Boolean);
+    roots.forEach((root) => { root.querySelectorAll('[data-role=reply]').forEach((r) => r.setAttribute('data-e2e-before', '1')); });
+  });
   await L.submitEdit(dw, o.note || NOTE);
-  const reply = dw.locator('[data-role=reply]');
   const outcome = await L.waitFor(async () => {
-    const done = await reply.getAttribute('data-done', { timeout: 500 }).catch(() => null);
-    if (done) return { done };
-    const err = await dw.locator('[data-role=error]').last().textContent({ timeout: 300 }).catch(() => null);
-    if (err) return { error: err };
+    const cur = await dw.evaluate(() => {
+      const roots = [document.getElementById('dw-ext-feed'), document.getElementById('dw-ext-root')].map((h) => h && h.shadowRoot).filter(Boolean);
+      for (const root of roots) {
+        const err = root.querySelector('[data-role=error]');
+        if (err && (err.textContent || '').trim() && !root.querySelector('[data-role=reply][data-e2e-before]')) return { error: err.textContent };
+        const r = root.querySelector('[data-role=reply][data-done]:not([data-e2e-before])');
+        if (r) return { done: r.getAttribute('data-done') };
+      }
+      return null;
+    });
+    if (!cur) return null;
+    if (cur.error) return { error: cur.error };
+    if (cur.done) return { done: cur.done };
     return null;
   }, o.timeout || 40000, 'reply done or error');
   return outcome;
@@ -697,5 +710,57 @@ scenarios['home-editor-fallback'] = async (env) => {
   await p.close();
   return c.steps;
 };
+
+
+// v0.1.11: a reload of the DW page must remount the chat (sessionStorage and/or the extension's last job result).
+// Uses /editor.html so the real markup.js feed is on the page (the mock at / does not persist a feed).
+scenarios['feed-survives-reload'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=rawdoc');
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const before = await dw.evaluate(() => {
+    const feed = document.getElementById('dw-ext-feed');
+    const root = feed && feed.shadowRoot;
+    const rep = root && root.querySelector('[data-role=reply]');
+    return { has: !!rep, done: rep && rep.getAttribute('data-done'), text: rep && (rep.getAttribute('data-plain') || rep.textContent) || '', details: root ? root.querySelectorAll('details.code, details.md-code').length : 0 };
+  });
+  c.check('reply_visible_before_reload', before.has && before.done === 'complete' && /That is all/.test(before.text), before);
+  await dw.reload();
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const after = await L.waitFor(async () => {
+    const x = await dw.evaluate(() => {
+      const feed = document.getElementById('dw-ext-feed');
+      const root = feed && feed.shadowRoot;
+      const rep = root && root.querySelector('[data-role=reply]');
+      const note = root && root.querySelector('[data-role=feed-note]');
+      return { has: !!rep, done: rep && rep.getAttribute('data-done'), text: rep && (rep.getAttribute('data-plain') || rep.textContent) || '', note: note && note.textContent, details: root ? root.querySelectorAll('details.code, details.md-code').length : 0 };
+    });
+    return x && x.has && /That is all/.test(x.text) ? x : null;
+  }, 20000, 'restored feed reply');
+  c.check('reply_restored_after_reload', after && after.has && /That is all/.test(after.text) && after.details >= 1, after);
+  // sessionStorage cleared: the extension still has the last result (or can peek the AI tab)
+  await dw.evaluate(() => { Object.keys(sessionStorage).forEach((k) => { if (k.indexOf('dw_ext_feed') === 0) sessionStorage.removeItem(k); }); });
+  await dw.reload();
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const again = await L.waitFor(async () => {
+    const x = await dw.evaluate(() => {
+      const feed = document.getElementById('dw-ext-feed');
+      const root = feed && feed.shadowRoot;
+      const rep = root && root.querySelector('[data-role=reply]');
+      return { has: !!rep, text: rep && (rep.getAttribute('data-plain') || rep.textContent) || '' };
+    });
+    return x && x.has && /That is all/.test(x.text) ? x : null;
+  }, 20000, 'restored feed from extension');
+  c.check('reply_restored_from_extension_after_storage_cleared', again && /That is all/.test(again.text), again);
+  return c.steps;
+};
+
 
 module.exports.scenarios = scenarios;

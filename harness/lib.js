@@ -81,7 +81,7 @@ const panelText = (page, role) => page.evaluate((r) => {
   return n ? (n.innerText || n.textContent) : null;
 }, role).catch(() => null);
 async function installRecorder(page) {
-  await page.waitForSelector('#dw-ext-feed, #dw-ext-root', { state: 'attached', timeout: 20000 });
+  await page.waitForSelector('#dw-ext-feed, #dw-ext-root, #dw-markup-root', { state: 'attached', timeout: 20000 });
   await page.evaluate(() => {
     window.__snaps = [];
     const feed = document.getElementById('dw-ext-feed');

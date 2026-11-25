@@ -166,6 +166,11 @@
       setRelayChecked: function (on) { chk.checked = !!on; },
       addUser: function (text, shot) {
         replyEl = null; filesEl = null; logEl = null;
+        // v0.1.11: keep earlier turns (including a restored reply). Mark them done / not live so they are not taken for this send.
+        Array.prototype.forEach.call(scroll.querySelectorAll('[data-role=reply]'), function (n) {
+          n.classList.remove('live');
+          if (!n.getAttribute('data-done')) n.setAttribute('data-done', 'complete');
+        });
         var row = el(doc, 'div', { class: 'me', 'data-role': 'me' });
         if (typeof shot === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(shot)) {
           var img = el(doc, 'img', { class: 'thumb', 'data-role': 'thumb', alt: 'Screenshot sent' });

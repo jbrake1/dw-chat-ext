@@ -39,12 +39,48 @@ const store = {
 const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false, stopGen: 0 };
 const payloads = {}; // jobId -> {prompt, file} kept in memory only until the prompt is sent
 const iconLog = {};  // tabId -> 'green'|'grey' (debug/test visibility)
+const lastByTab = {}; // v0.1.11: last job result per DW tab, so a refresh can restore the chat
+const LAST_TTL = 30 * 60 * 1000;
 const ready = (async () => {
-  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId', 'userUnpaired']);
+  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId', 'userUnpaired', 'lastByTab']);
   S.userUnpaired = !!d.userUnpaired;
   S.pair = d.pair || null; S.tabs = d.tabs || {}; S.jobs = d.jobs || {}; S.paused = !!d.paused; S.activeJobId = d.activeJobId || null;
+  if (d.lastByTab && typeof d.lastByTab === 'object') Object.assign(lastByTab, d.lastByTab);
 })();
 const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId, userUnpaired: S.userUnpaired });
+function lastOf(tabId) {
+  const r = lastByTab[tabId];
+  if (!r || Date.now() - (r.t || 0) > LAST_TTL) { delete lastByTab[tabId]; return null; }
+  return r;
+}
+function putLast(tabId, patch) {
+  if (!tabId) return;
+  lastByTab[tabId] = Object.assign({}, lastByTab[tabId] || {}, patch, { t: Date.now(), dwTabId: tabId });
+  ses.set({ lastByTab }).catch(() => {});
+}
+function publicLast(rec) {
+  if (!rec) return null;
+  const running = !!(rec.jobId && S.activeJobId && S.jobs[S.activeJobId] && S.jobs[S.activeJobId].id === rec.jobId);
+  return {
+    jobId: rec.jobId, pageUrl: rec.pageUrl || '', path: rec.pagePath || '',
+    status: rec.status || '', state: rec.status === 'complete' ? 'done' : rec.status,
+    text: rec.text || '', files: rec.files || [], blocks: rec.blocks || [], steps: rec.steps || [],
+    note: rec.note || '', ai: rec.provider || rec.ai || '', error: rec.error || null, running: running
+  };
+}
+function samePage(rec, path, pageUrl) {
+  if (!rec) return false;
+  if (rec.pagePath && path) {
+    if (rec.pagePath === path) return true;
+    const a = rec.pagePath.endsWith('/index.html') ? rec.pagePath.slice(0, -10) : rec.pagePath;
+    const b = path.endsWith('/index.html') ? path.slice(0, -10) : path;
+    return a === b;
+  }
+  if (rec.pageUrl && pageUrl) {
+    try { return new URL(rec.pageUrl).pathname === new URL(pageUrl).pathname; } catch (e) { return rec.pageUrl.split('#')[0] === pageUrl.split('#')[0]; }
+  }
+  return true;
+}
 
 // ---------- relay log (v0.1.7) ----------
 // A small ring buffer kept in storage.local (survives a service-worker restart, a page reload and a closed editor) so a
@@ -67,7 +103,7 @@ function dl(ev, data) {
     loc.set({ dlog }).catch(() => {});
   } catch (e) { /* logging never breaks the relay */ }
 }
-function lastOf(pred) { for (let i = dlog.length - 1; i >= 0; i--) if (pred(dlog[i])) return dlog[i]; return null; }
+function lastLog(pred) { for (let i = dlog.length - 1; i >= 0; i--) if (pred(dlog[i])) return dlog[i]; return null; }
 async function diagSnapshot() {
   await dlogReady;
   const job = S.activeJobId && S.jobs[S.activeJobId];
@@ -78,8 +114,8 @@ async function diagSnapshot() {
     const st = (await loc.get('instrStatus:' + siteId))['instrStatus:' + siteId] || null;
     instr[siteId] = g ? { source: g.source, version: g.instr.version, revision: g.instr.revision, verified: !!g.instr.verified, lastCheck: st ? (st.status + (st.code ? ' ' + st.code : '')) : null } : null;
   }
-  const step = lastOf((e) => e.ev === 'gpt' && e.kind === 'step');
-  const err = lastOf((e) => /^(gpt_error|reject|submit_exc|timeout|dispatch_fail|inject|sw_error)$/.test(e.ev) && (e.ev !== 'inject' || e.ok === false) && (e.ev !== 'reject' || e.code));
+  const step = lastLog((e) => e.ev === 'gpt' && e.kind === 'step');
+  const err = lastLog((e) => /^(gpt_error|reject|submit_exc|timeout|dispatch_fail|inject|sw_error)$/.test(e.ev) && (e.ev !== 'inject' || e.ok === false) && (e.ev !== 'reject' || e.code));
   return {
     now: Date.now(), extVersion: EXT_VERSION, provider: S.provider, paired: !!S.pair, pairSite: S.pair ? S.pair.siteId : null,
     paused: S.paused, userUnpaired: S.userUnpaired, stopGen: S.stopGen, editorTabs: Object.keys(S.tabs).length,
@@ -346,7 +382,8 @@ async function handleSubmit0(sender, msg) {
     if (pageFiles.length && DWX.shrinkImagesForAi) pageFiles = await DWX.shrinkImagesForAi(pageFiles);
   } catch (e) {}
   const id = newId();
-  S.jobs[id] = { id, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now() };
+  S.jobs[id] = { id, dwTabId: tabId, gptTabId: S.pair.tabId, siteId: S.pair.siteId, sub: v.sub, retried: false, startedAt: Date.now(), pageUrl: j.pageUrl || '', pagePath: j.pagePath || '' };
+  putLast(tabId, { jobId: id, pageUrl: j.pageUrl || '', pagePath: j.pagePath || '', provider: providerId, status: 'sending', text: '', files: [], blocks: [], steps: [], note: typeof j.note === 'string' ? j.note.slice(0, 5000) : '' });
   S.activeJobId = id;
   payloads[id] = { prompt: j.prompt, file: j.file || null, files: pageFiles };
   await persist();
@@ -416,8 +453,15 @@ async function onGptEvent(sender, msg) {
     return { ok: true };
   }
   if (evt.kind === 'step' && evt.step === 'send') delete payloads[job.id];
+  if (evt.kind === 'chunk') putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: 'streaming', text: evt.text || '', files: evt.files || [] });
+  if (evt.kind === 'done') putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: evt.status === 'stopped' ? 'stopped' : 'complete', text: evt.text || '', files: evt.files || [], blocks: evt.blocks || [] });
+  if (evt.kind === 'step') {
+    const rec = lastOf(job.dwTabId) || {};
+    putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, steps: (rec.steps || []).concat({ name: evt.step, ok: evt.ok !== false }).slice(-40) });
+  }
+  if (evt.kind === 'error') putLast(job.dwTabId, { jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: 'error', error: { code: evt.code, step: evt.step }, text: evt.text || (lastOf(job.dwTabId) || {}).text || '' });
   await tell(job.dwTabId, { type: 'sw:event', jobId: job.id, event: evt });
-  if (evt.kind === 'done') await finishJob(job.id);
+  if (evt.kind === 'done') await finishJob(job.id); // lastByTab is kept so a refresh can restore the chat
   return { ok: true };
 }
 
@@ -535,6 +579,39 @@ async function handleSnapshot(from) {
 }
 
 // ---------- messages ----------
+
+async function peekPair(dwTabId, rec) {
+  try {
+    if (!S.pair || !S.pair.tabId) return null;
+    const inst = await getInstructions(S.pair.siteId, false);
+    if (!inst || !inst.instr) return null;
+    const r = await withTimeout(chrome.tabs.sendMessage(S.pair.tabId, { type: 'gpt:peek', instr: inst.instr }), 8000, 'peek_timeout');
+    if (!r || !r.ok || !(r.text || (r.blocks && r.blocks.length))) return null;
+    putLast(dwTabId, Object.assign({}, rec || {}, {
+      status: 'complete', text: r.text || '', files: r.files || [], blocks: r.blocks || [],
+      provider: (rec && rec.provider) || S.provider, via: 'peek'
+    }));
+    return lastOf(dwTabId);
+  } catch (e) { return rec || null; }
+}
+
+async function lastResult(sender, msg) {
+  await ready;
+  const tabId = sender.tab && sender.tab.id;
+  if (!tabId) return { ok: false, code: 'no_tab' };
+  const path = (msg && msg.path) || '';
+  const pageUrl = (msg && msg.pageUrl) || '';
+  let rec = lastOf(tabId);
+  if (rec && (path || pageUrl) && !samePage(rec, path, pageUrl)) rec = null;
+  const running = !!(rec && rec.jobId && S.activeJobId && S.jobs[S.activeJobId] && S.jobs[S.activeJobId].id === rec.jobId);
+  if ((!rec || (rec.status !== 'complete' && rec.status !== 'stopped' && rec.status !== 'error')) && !running && rec && S.pair) {
+    const peeked = await peekPair(tabId, rec);
+    if (peeked) rec = peeked;
+  }
+  if (!rec) return { ok: false, code: 'no_result' };
+  return { ok: true, result: publicLast(rec) };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     await ready; await providerReady;
@@ -583,6 +660,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return setProvider(msg.provider);
       }
       case 'popup:setProvider': if (!fromExt) return { ok: false }; return setProvider(msg.provider);
+      case 'dw:lastResult': return lastResult(sender, msg);
       case 'dw:pageStatus': {
         const siteId = S.pair && S.pair.siteId;
         const ai = (typeof siteId === 'string' && DWX.AI_ALLOWLIST[siteId]) ? siteId : null;
