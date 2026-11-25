@@ -154,6 +154,11 @@
         var tp = document.createElement('p'); tp.textContent = 'Save the new image to /assets/img/hanalei-taro-1600.webp and /assets/img/hanalei-taro-1600.jpg.'; md2.appendChild(tp);
         return;
       }
+      if (q.get('reply') === 'family') {                                          // v0.1.14: James's case — missing webp source, generated jpeg fallback
+        add('/index.html', 'HTML', '<!doctype html>\n<html><body><picture><source type="image/webp" srcset="assets/img/family-working-at-home.webp"><img src="assets/img/Gemini_Generated_Image_a1b2c3d4e5f6.jpeg" alt="Family working at home"></picture></body></html>\n');
+        var fp = document.createElement('p'); fp.textContent = 'I added a generated photo.'; md2.appendChild(fp);
+        return;
+      }
       add('/index.html', 'HTML', '<!doctype html>\n<html><body><h1>Family owned since 1998</h1></body></html>\n');
       add('/css/site.css', 'CSS', 'h1{color:#1f4d2b}\n');
       var tail = document.createElement('p'); tail.textContent = 'That is all.'; md2.appendChild(tail);
@@ -164,17 +169,22 @@
       // v0.1.12 (?chips=1): files the model "made with code", shown as download chips under the reply (best-effort mimic).
       if (q.get('chips') === '1') {
         var box = document.createElement('div'); box.className = 'attachment-container generated-files';
-        box.innerHTML = '<div class="file-tile"><span class="file-name">hanalei-taro-1600.webp</span><button class="dl" aria-label="Download file"><mat-icon fonticon="download">download</mat-icon></button></div>' +
+        var family = q.get('reply') === 'family';
+        box.innerHTML = family
+          ? '<div class="file-tile"><span class="file-name">Gemini_Generated_Image_a1b2c3d4e5f6.jpeg</span><button class="dl" aria-label="Download file"><mat-icon fonticon="download">download</mat-icon></button></div>'
+          : ('<div class="file-tile"><span class="file-name">hanalei-taro-1600.webp</span><button class="dl" aria-label="Download file"><mat-icon fonticon="download">download</mat-icon></button></div>' +
           '<div class="file-tile"><span class="file-name">hanalei-taro-1600.jpg</span><a class="open" href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==">Open</a></div>' +
-          '<div class="file-tile"><span class="file-name">notes.txt</span><button aria-label="Share notes.txt">share</button></div>';
+          '<div class="file-tile"><span class="file-name">notes.txt</span><button aria-label="Share notes.txt">share</button></div>');
         var mdx = mr.querySelector('.markdown');
         mdx.parentNode.appendChild(box);
         var tag = document.createElement('p'); tag.textContent = '[file-tag: code-generated-file-2-1795450470]'; mdx.appendChild(tag);
         box.querySelector('button.dl').addEventListener('click', function () {
           window.__downloads = (window.__downloads || 0) + 1;
-          var bytes = new Uint8Array([0x52,0x49,0x46,0x46,0x10,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20,1,2,3,4]);
-          var u = URL.createObjectURL(new Blob([bytes], { type: 'image/webp' }));
-          var a = document.createElement('a'); a.href = u; a.download = 'hanalei-taro-1600.webp'; a.click();
+          var bytes, type, name;
+          if (family) { bytes = new Uint8Array([0xFF,0xD8,0xFF,0xE0,0,0x10,0x4A,0x46,0,0,0,0,0,0,0,0]); type = 'image/jpeg'; name = 'Gemini_Generated_Image_a1b2c3d4e5f6.jpeg'; }
+          else { bytes = new Uint8Array([0x52,0x49,0x46,0x46,0x10,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20,1,2,3,4]); type = 'image/webp'; name = 'hanalei-taro-1600.webp'; }
+          var u = URL.createObjectURL(new Blob([bytes], { type: type }));
+          var a = document.createElement('a'); a.href = u; a.download = name; a.click();
         });
       }
       var acts = document.createElement('message-actions'); acts.innerHTML = '<button aria-label="Good response">up</button><button aria-label="Share &amp; export">share</button><button aria-label="Copy">copy</button>';

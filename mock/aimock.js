@@ -80,19 +80,37 @@
       var tp = document.createElement('p'); tp.textContent = 'Save the new image to /assets/img/hanalei-taro-1600.webp and /assets/img/hanalei-taro-1600.jpg.'; md.appendChild(tp);
       return;
     }
+    if (q.get('reply') === 'family') {
+      add(md, '/index.html', 'html', '<!doctype html>\n<html><body><picture><source type="image/webp" srcset="assets/img/family-working-at-home.webp"><img src="assets/img/Gemini_Generated_Image_a1b2c3d4e5f6.jpeg" alt="Family working at home"></picture></body></html>\n');
+      var fp = document.createElement('p'); fp.textContent = 'I added a generated photo. The webp source is a fallback candidate.'; md.appendChild(fp);
+      return;
+    }
     add(md, '/index.html', 'html', '<!doctype html>\n<html><body><h1>Family owned since 1998</h1></body></html>\n');
     add(md, '/css/site.css', 'css', 'h1{color:#1f4d2b}\n');
     var tail = document.createElement('p'); tail.textContent = 'That is all.'; md.appendChild(tail);
   }
   function chips(a) {
     var box = M.chips();
+    var family = q.get('reply') === 'family';
+    if (family) {
+      var card = box.querySelector('[data-testid=file-card]') || box.firstElementChild;
+      var nm = card && card.querySelector('.file-name, [class*=name]');
+      if (nm) nm.textContent = 'Gemini_Generated_Image_a1b2c3d4e5f6.jpeg';
+    }
     (a.chipHost || a.el).appendChild(box);
     var b = box.querySelector('[data-dl]');
     b.addEventListener('click', function () {
       window.__downloads++;
-      var bytes = new Uint8Array([0x52,0x49,0x46,0x46,0x10,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20,1,2,3,4]);
-      var u = URL.createObjectURL(new Blob([bytes], { type: 'image/webp' }));
-      var l = document.createElement('a'); l.href = u; l.download = 'hanalei-taro-1600.webp'; l.click();
+      var bytes, type, name;
+      if (family) {
+        bytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0, 0, 0, 0, 0, 0, 0, 0]);
+        type = 'image/jpeg'; name = 'Gemini_Generated_Image_a1b2c3d4e5f6.jpeg';
+      } else {
+        bytes = new Uint8Array([0x52,0x49,0x46,0x46,0x10,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20,1,2,3,4]);
+        type = 'image/webp'; name = 'hanalei-taro-1600.webp';
+      }
+      var u = URL.createObjectURL(new Blob([bytes], { type: type }));
+      var l = document.createElement('a'); l.href = u; l.download = name; l.click();
     });
   }
   refresh();

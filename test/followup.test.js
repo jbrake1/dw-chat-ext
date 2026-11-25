@@ -65,6 +65,12 @@ test('editor: after a reply the follow-up box shows; Send follow-up posts follow
   assert.equal(calls.filter((c) => c.action === 'create').length, 1);
   const fu = shadowAll(win, '[data-role=feed-followup]')[0];
   assert.ok(fu); assert.equal(fu.style.display, 'flex', 'follow-up box visible after the reply');
+  const header = shadowAll(win, '[data-role=feed-tools]')[0];
+  assert.ok(header, 'diagnostics live in the chat header');
+  assert.ok(header.querySelector('[data-act=diag]')); assert.equal(header.querySelector('[data-act=diag]').textContent, 'Copy diagnostics');
+  assert.ok(header.querySelector('[data-act=snapshot]')); assert.equal(header.querySelector('[data-act=snapshot]').textContent, 'Send page snapshot');
+  assert.ok(shadowAll(win, '[data-role=card-tools] [data-act=diag]')[0], 'same links on the preview panel');
+  assert.ok(shadowAll(win, '[data-act=followup-markup]')[0], 'Mark up this page is in the follow-up box');
   assert.equal(shadowAll(win, '.feed')[0].getAttribute('data-chime'), 'ok', 'the finished-and-staged chime');
   assert.deepEqual(win.__notes.slice(0, 3), [523.25, 659.25, 783.99]);
   shadowAll(win, '[data-role=followup-text]')[0].value = 'The second image did not load';
@@ -91,4 +97,43 @@ test('editor: the mute switch is remembered and silences the chime', async () =>
   await sleep(200);
   assert.equal(shadowAll(win, '.feed')[0].getAttribute('data-chime'), 'muted');
   assert.equal(win.__notes.length, 0);
+});
+
+test('follow-up: Mark up this page brings back arrow, box and the other tools; Send includes the new screenshot', async () => {
+  const { win, posted } = editor();
+  await sleep(50);
+  send(win, { type: 'dw-ext-ready', paired: true });
+  send(win, { type: 'dw-ext-done', jobId: 'j1', status: 'complete', text: 'File: /index.html\n```html\n' + PAGE + '```', files: [], blocks: [{ label: 'File: /index.html', lang: 'html', code: PAGE }] });
+  await sleep(300);
+  const ctxStub = () => ({
+    drawImage() {}, fillRect() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {},
+    closePath() {}, save() {}, restore() {}, translate() {}, scale() {}, setLineDash() {}, arc() {},
+    bezierCurveTo() {}, quadraticCurveTo() {}, fillText() {}, strokeText() {}, rect() {}, clip() {},
+    measureText: () => ({ width: 10 }), setTransform() {}, rotate() {},
+    canvas: { width: 20, height: 10 },
+    lineWidth: 1, strokeStyle: '', fillStyle: '', font: '', globalAlpha: 1, lineCap: '', lineJoin: ''
+  });
+  win.HTMLCanvasElement.prototype.getContext = function () { return ctxStub(); };
+  win.HTMLCanvasElement.prototype.toBlob = function (cb, type) { cb(new win.Blob([new Uint8Array([0xFF, 0xD8, 0xFF, 0xD9])], { type: type || 'image/jpeg' })); };
+  if (!win.URL.createObjectURL) win.URL.createObjectURL = () => 'blob:test';
+  win.html2canvas = async () => { const c = win.document.createElement('canvas'); c.width = 20; c.height = 10; return c; };
+  const mk = shadowAll(win, '[data-act=followup-markup]')[0];
+  assert.ok(mk); assert.equal(mk.textContent, 'Mark up this page');
+  mk.click();
+  await sleep(50);
+  const bar = shadowAll(win, '[role=toolbar]')[0] || win.document.getElementById('dw-markup-root').shadowRoot.querySelector('.bar');
+  assert.ok(bar, 'markup toolbar is back');
+  assert.deepEqual([...bar.querySelectorAll('[data-tool]')].map((b) => b.getAttribute('data-tool')), ['pen', 'arrow', 'box', 'text', 'highlight', 'pan']);
+  assert.ok(bar.querySelector('[data-act=hide-markup]'), 'Hide tools, not a first-send Cancel/Send');
+  assert.equal(mk.textContent, 'Hide markup tools');
+  shadowAll(win, '[data-role=followup-text]')[0].value = 'Please move this box';
+  shadowAll(win, '[data-act=followup-send]')[0].click();
+  let sub = null;
+  for (let i = 0; i < 25 && !sub; i++) { await sleep(50); sub = posted.find((p) => p.type === 'dw-ext-submit' && p.followUp === true); }
+  const err = shadowAll(win, '[data-role=followup-msg]')[0];
+  assert.ok(sub, 'follow-up was posted' + (err && err.textContent ? ' (' + err.textContent + ')' : '') + ' posted=' + posted.map((p) => p.type).join(','));
+  assert.equal(sub.note, 'Please move this box');
+  assert.match(sub.screenshot || '', /^data:image\/jpeg;base64,/);
+  assert.ok(sub.element && typeof sub.element.capture === 'string');
+  assert.equal(mk.isConnected ? mk.textContent : 'Mark up this page', 'Mark up this page', 'tools hide after send');
 });

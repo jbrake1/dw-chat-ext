@@ -426,7 +426,7 @@
     var done = false;
     function finish(ext) {
       if (done) return; done = true; XT.diagWait = null;
-      var out = { page: { v: 'markup-0.1.7', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
+      var out = { page: { v: 'markup-0.1.14', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
       var text = JSON.stringify(out, null, 1);
       function fallback() {
         var host = XT.feedScroll || XT.box;
@@ -439,41 +439,42 @@
     xtPost('dw-ext-diag', {});
     setTimeout(function () { finish(null); }, 1500);
   }
-  function xtDiagButton() {
-    if (!XT.feedFoot) return;
-    if (XT.feedFoot.querySelector('[data-act=diag]')) return;
-    var b = el('button', { type: 'button', 'data-act': 'diag' }, 'Copy diagnostics');
-    b.addEventListener('click', function () { xtCopyDiag(b); });
-    XT.feedFoot.style.display = ''; XT.feedFoot.appendChild(b);
-  }
   function xtSnapDownload(r) {
     if (!r || r.via !== 'download' || !r.json) return;
     var a = el('a', { href: URL.createObjectURL(new Blob([r.json], { type: 'application/json' })), download: r.filename || ('dw-snap-' + r.id + '.json') });
     document.documentElement.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 1500);
   }
-  function xtSnapButton() {
-    var v = (XT.last && XT.last.extVersion) || '';
-    var ok = false;
-    try { var a = v.split('.').map(Number), b = [0,1,8]; for (var i = 0; i < 3; i++) { if ((a[i]||0)>(b[i]||0)) { ok = true; break; } if ((a[i]||0)<(b[i]||0)) break; if (i===2) ok = true; } } catch (e) {}
-    if (!ok) return;                                                          // v0.1.7 and earlier have no snapshot handler; hide the button
-    if (!XT.feedFoot) return;
-    if (XT.feedFoot.querySelector('[data-act=snapshot]')) return;
-    var b = el('button', { type: 'button', 'data-act': 'snapshot' }, 'Send page snapshot');
-    var st = el('span', { 'data-role': 'snap-status', style: 'font-size:12px;align-self:center' }, '');
-    b.addEventListener('click', function () {
-      st.textContent = 'Capturing…';
-      XT.snapWait = function (r) {
-        XT.snapWait = null;
-        if (!r || !r.ok) { st.textContent = 'Could not capture' + (r && r.code ? ' (' + r.code + ').' : '.'); return; }
-        st.textContent = (r.via === 'upload' ? 'Sent. Snapshot id: ' : 'Downloaded. Snapshot id: ') + r.id;
-        xtSnapDownload(r);
-      };
-      xtPost('dw-ext-snapshot', {});
-      setTimeout(function () { if (XT.snapWait) XT.snapWait({ ok: false, code: 'no_answer' }); }, 20000);
-    });
-    XT.feedFoot.style.display = ''; XT.feedFoot.appendChild(b); XT.feedFoot.appendChild(st);
+  // Captures the paired AI tab (same path as the popup). statusEl is updated with the short snapshot id.
+  function xtSnapRun(statusEl) {
+    if (statusEl) statusEl.textContent = 'Capturing\u2026';
+    XT.snapWait = function (r) {
+      XT.snapWait = null;
+      var t = (!r || !r.ok) ? ('Could not capture' + (r && r.code ? ' (' + r.code + ').' : '.'))
+        : ((r.via === 'upload' ? 'Sent. Snapshot id: ' : 'Downloaded. Snapshot id: ') + r.id);
+      if (statusEl) statusEl.textContent = t;
+      var other = XT.feedTools && XT.feedTools.querySelector('[data-role=snap-status]');
+      if (other && other !== statusEl) other.textContent = t;
+      xtSnapDownload(r);
+    };
+    xtPost('dw-ext-snapshot', {});
+    setTimeout(function () { if (XT.snapWait) XT.snapWait({ ok: false, code: 'no_answer' }); }, 20000);
   }
+  // v0.1.14: Copy diagnostics and Send page snapshot live in the chat window header (always, not only after an error).
+  function xtFeedToolsMount() {
+    if (!XT.feed || XT.feedTools) return;
+    var hd = XT.feed.querySelector('.hd'); if (!hd) return;
+    XT.feedTools = el('div', { class: 'tools', 'data-role': 'feed-tools' });
+    var d = el('button', { type: 'button', 'data-act': 'diag', title: 'Copy a diagnostics snapshot of this page and the extension' }, 'Copy diagnostics');
+    d.addEventListener('click', function () { xtCopyDiag(d); });
+    var b = el('button', { type: 'button', 'data-act': 'snapshot', title: 'Capture a structure snapshot of the paired AI tab' }, 'Send page snapshot');
+    var st = el('span', { 'data-role': 'snap-status' }, '');
+    b.addEventListener('click', function () { xtSnapRun(st); });
+    XT.feedTools.appendChild(d); XT.feedTools.appendChild(b); XT.feedTools.appendChild(st);
+    hd.appendChild(XT.feedTools);
+  }
+  function xtDiagButton() { xtFeedToolsMount(); }
+  function xtSnapButton() { xtFeedToolsMount(); }
   // Send pressed but the extension is not running on this page (it was installed or updated after the page loaded).
   function xtNoRelay(note, blob) {
     xtAiUse();
@@ -558,6 +559,7 @@
   var XT_DRAFT_ATT_MAX = 1500000;
   function xsDraftGet() { var d = xsGetJson('draft'); return d && d.v === 1 ? d : null; }
   function xsDraftSave(open) {
+    if (XT.followMarkup) return;                                               // v0.1.14: follow-up markup is not the first-send draft
     if (XS.draftTimer) { clearTimeout(XS.draftTimer); XS.draftTimer = null; }
     var prev = xsDraftGet() || {};
     var att = XT_ATT.map(function (a) { return { name: a.name, size: a.size, ext: a.ext, path: a.path || '', dataUrl: a.dataUrl || null }; }), total = 0;
@@ -909,13 +911,16 @@
     ':host{all:initial}',
     '*{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}',
     '.feed{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(380px,calc(100vw - 24px));max-height:min(52vh,440px);background:#1b1d21;color:#e8eaed;border:1px solid #2d3138;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:13px;line-height:1.45;display:flex;flex-direction:column;overflow:hidden}',
-    '.hd{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#14161a;border-bottom:1px solid #2d3138}',
+    '.hd{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#14161a;border-bottom:1px solid #2d3138;flex-wrap:wrap}',
     '.dot{width:8px;height:8px;border-radius:50%;background:#6b7280;flex:none}.dot.on{background:#34d399}.dot.paused{background:#fbbf24}.dot.err{background:#f87171}',
     '.spin{width:10px;height:10px;border:2px solid #3f4550;border-top-color:#93c5fd;border-radius:50%;flex:none;animation:dwxspin .7s linear infinite}.spin.off{visibility:hidden}',
     '@keyframes dwxspin{to{transform:rotate(360deg)}}',
     '.title{font-weight:600;flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.hd button{border:0;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;background:#2a2f36;color:#e8eaed}',
     '.hd button:hover:not(:disabled){background:#3a404a}.hd button:disabled{opacity:.4;cursor:default}',
+    '.hd .tools{display:flex;align-items:center;gap:6px;flex:1 1 100%;padding-top:2px}',
+    '.hd .tools button{font-size:10px;padding:2px 7px}',
+    '.hd .tools [data-role=snap-status]{font-size:10px;color:#9aa3ad;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.scroll{overflow:auto;flex:1;min-height:80px;padding:8px 9px;display:flex;flex-direction:column;gap:8px}',
     '.me{display:flex;gap:8px;align-items:flex-start;background:#252830;border:1px solid #333844;border-radius:8px;padding:7px 8px}',
     '.me .thumb{width:56px;height:56px;object-fit:cover;border-radius:6px;background:#111;flex:none;border:1px solid #3a3f48}',
@@ -1048,6 +1053,8 @@
     XT.followText.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); xtFollowSend(); } });
     var fuRow = el('div', { class: 'row' });
     XT.followAttach = el('button', { type: 'button', 'data-act': 'followup-attach', title: 'Attach pictures or files to this follow-up' }, '\uD83D\uDCCE Attach');
+    XT.followMarkupBtn = el('button', { type: 'button', 'data-act': 'followup-markup', title: 'Mark up this page or the staged preview with the same tools as the first send (arrow, box, pen, and the others). The follow-up sends the new screenshot.' }, 'Mark up this page');
+    XT.followMarkupBtn.addEventListener('click', function () { if (active && XT.followMarkup) stop(); else start({ followUp: true }); xtFollowMarkupPaint(); });
     XT.followInput = el('input', { type: 'file', multiple: 'multiple', hidden: 'hidden', 'data-role': 'followup-input', accept: '.html,.htm,.css,.js,.mjs,.json,.svg,.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt' });
     XT.followAttach.addEventListener('click', function () { XT.followInput.click(); });
     XT.followInput.addEventListener('change', function () { xtFollowAdd(XT.followInput.files); XT.followInput.value = ''; });
@@ -1058,11 +1065,12 @@
     XT.followSend.addEventListener('click', function () { xtFollowSend(); });
     XT.followNames = el('div', { class: 'names', 'data-role': 'followup-names' }, '');
     XT.followMsg = el('div', { class: 'fumsg', 'data-role': 'followup-msg' }, '');
-    [XT.followAttach, fuChk, XT.followSend].forEach(function (n) { fuRow.appendChild(n); });
+    [XT.followMarkupBtn, XT.followAttach, fuChk, XT.followSend].forEach(function (n) { fuRow.appendChild(n); });
     [XT.followText, XT.followNames, fuRow, XT.followMsg, XT.followInput].forEach(function (n) { XT.feedFollow.appendChild(n); });
     wrap.appendChild(XT.feedFollow);
     XT.feedRoot.appendChild(wrap);
     XT.feed = wrap;
+    xtFeedToolsMount();
     document.documentElement.appendChild(XT.feedHost);
     XT.feedStick = true;
     XT.feedScroll.addEventListener('scroll', function () {
@@ -1138,11 +1146,18 @@
 
   // ----- v0.1.12: follow-ups. The next message goes into the SAME AI conversation (the extension skips New chat). -----
   var XT_FATT = [];
+  function xtFollowMarkupPaint() {
+    if (!XT.followMarkupBtn) return;
+    var on = !!(active && XT.followMarkup);
+    XT.followMarkupBtn.textContent = on ? 'Hide markup tools' : 'Mark up this page';
+    XT.followMarkupBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
   function xtFollowShow(on) {
     if (!XT.feedFollow) return;
     XT.feedFollow.style.display = on && XT.active ? 'flex' : 'none';
     if (on && XT.followText) XT.followText.setAttribute('placeholder', 'Reply to ' + xtAiName(XT.ai) + ' in the same chat\u2026 (Ctrl+Enter to send)');
     if (XT.followMsg && !on) XT.followMsg.textContent = '';
+    if (on) xtFollowMarkupPaint();
   }
   function xtFeedHistory(hist) {
     (Array.isArray(hist) ? hist : []).forEach(function (h) {
@@ -1170,7 +1185,7 @@
     xtFollowRender(bad.length ? 'Not attached: ' + bad.join('; ') + '.' : '');
   }
   // The new turn goes under the earlier ones; the earlier ones stay on screen and in the saved record.
-  function xtFeedFollowUser(note) {
+  function xtFeedFollowUser(note, blob) {
     xtFeedMount();
     xtFollowShow(false);
     XT.followTurn = true;
@@ -1185,6 +1200,7 @@
     Array.prototype.forEach.call(XT.feedScroll.querySelectorAll('[data-role=error],[data-role=feed-stopped]'), function (n) { n.setAttribute('data-old', '1'); });
     XT.feedReply = null; XT.feedFiles = null;
     var row = el('div', { class: 'me', 'data-role': 'feed-user', 'data-follow': '1' });
+    if (blob) { try { var img = el('img', { class: 'thumb', alt: 'Marked-up screenshot' }); img.src = URL.createObjectURL(blob); row.appendChild(img); } catch (e) {} }
     row.appendChild(el('div', { class: 'txt', 'data-role': 'feed-note' }, note || '(no note)'));
     XT.feedRec = { note: note || '(no note)', ai: XT.ai, state: 'sending', sent: XT.sent, history: hist };
     xtFeedRecordSet(XT.feedRec);
@@ -1194,37 +1210,56 @@
     XT.feedStick = true;
     xtFeedScroll();
   }
+  function xtBlobUrl(blob) {
+    return new Promise(function (res) {
+      if (!blob) return res('');
+      var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = function () { res(''); }; fr.readAsDataURL(blob);
+    });
+  }
   function xtFollowSend() {
     if (!XT.active || XT.job !== null) return;
     var note = XT.followText ? XT.followText.value.trim() : '';
     var attList = XT_FATT.slice();
-    if (!note && !attList.length) { if (XT.followMsg) XT.followMsg.textContent = 'Write a message or attach a file first.'; return; }
+    var willShot = !!(active && XT.followMarkup);
+    if (!note && !attList.length && !willShot) { if (XT.followMsg) XT.followMsg.textContent = 'Write a message, attach a file, or mark up the page first.'; return; }
+    if (willShot && !note) note = 'Please see the marked-up screenshot.';
     xtChimeUnlock();
     XT.aborted = false;
-    if (XT.box && XT.box.parentNode) { XT.box.parentNode.removeChild(XT.box); XT.box = null; }
     var withFiles = XT.followFiles ? !!XT.followFiles.checked : false;
     var imgs = withFiles ? xtImageCandidates(note) : [];
-    xtFeedFollowUser(note);
-    XT_FATT = []; if (XT.followText) XT.followText.value = ''; xtFollowRender('');
-    xtLog('followup_start', { files: attList.length, pageFiles: withFiles });
-    var row = (withFiles || attList.length) ? xtFeedAddStep('collect', false, withFiles ? 'Collecting page files\u2026' : 'Reading your attached files\u2026') : null;
-    xtAttTake(attList).then(function (att) {
-      return (withFiles ? xtCollectFiles(imgs, { files: att }) : Promise.resolve(null)).then(function (c) { return { att: att, c: c }; });
-    }).then(function (r) {
+    var shotP = willShot ? xtCaptureShot() : Promise.resolve(null);
+    shotP.then(function (shot) {
       if (XT.aborted) return;
-      try {
-        var all = r.att.concat(r.c ? r.c.files : []);
-        xtRemember(all, true);
-        var msg = { id: 'f' + Date.now().toString(36), note: note, followUp: true, pageUrl: location.href };
-        if (XT.ai && XT_AI[XT.ai]) msg.provider = XT.ai;
-        if (all.length) { msg.files = all; msg.skipped = r.c ? r.c.skipped : []; }
-        XT.lastSend = null;                                                      // a retry would start a new chat: not for a follow-up
-        if (row) { row.setAttribute('data-ok', '1'); row.textContent = '\u2713 ' + (withFiles ? 'Collecting page files' : 'Your attached files') + ' (' + all.length + ')'; }
-        xtPost('dw-ext-submit', msg);
-        xtLog('followup_posted', { ai: XT.ai });
-        xtWaitForRelay();
-      } catch (e) { xtFeedError('submit_failed', 'submit', {}); }
-    }, function () { xtFeedError('collect_failed', 'collect', {}); });
+      if (willShot) stop();                                                      // drop the overlay so the reply is visible
+      if (XT.box && XT.box.parentNode) { XT.box.parentNode.removeChild(XT.box); XT.box = null; }
+      xtFeedFollowUser(note, shot && shot.blob);
+      XT_FATT = []; if (XT.followText) XT.followText.value = ''; xtFollowRender('');
+      xtFollowMarkupPaint();
+      xtLog('followup_start', { files: attList.length, pageFiles: withFiles, shot: !!(shot && shot.blob) });
+      var row = (withFiles || attList.length) ? xtFeedAddStep('collect', false, withFiles ? 'Collecting page files\u2026' : 'Reading your attached files\u2026') : null;
+      return Promise.all([xtBlobUrl(shot && shot.blob), xtAttTake(attList).then(function (att) {
+        return (withFiles ? xtCollectFiles(imgs, { files: att }) : Promise.resolve(null)).then(function (c) { return { att: att, c: c }; });
+      })]).then(function (pair) {
+        if (XT.aborted) return;
+        try {
+          var dataUrl = pair[0], r = pair[1];
+          var all = r.att.concat(r.c ? r.c.files : []);
+          xtRemember(all, true);
+          var msg = { id: 'f' + Date.now().toString(36), note: note, followUp: true, pageUrl: location.href };
+          if (XT.ai && XT_AI[XT.ai]) msg.provider = XT.ai;
+          if (dataUrl) {
+            msg.screenshot = dataUrl;
+            msg.element = { selectors: shot.sels || [], capture: (shot.rect && shot.rect.full ? 'full page ' : 'part ') + (shot.rect ? shot.rect.w + 'x' + shot.rect.h : ''), viewport: (shot.vw || '') + 'x' + (shot.vh || '') };
+          }
+          if (all.length) { msg.files = all; msg.skipped = r.c ? r.c.skipped : []; }
+          XT.lastSend = null;                                                  // a retry would start a new chat: not for a follow-up
+          if (row) { row.setAttribute('data-ok', '1'); row.textContent = '\u2713 ' + (withFiles ? 'Collecting page files' : 'Your attached files') + ' (' + all.length + ')'; }
+          xtPost('dw-ext-submit', msg);
+          xtLog('followup_posted', { ai: XT.ai, shot: !!dataUrl });
+          xtWaitForRelay();
+        } catch (e) { xtFeedError('submit_failed', 'submit', {}); }
+      }, function () { xtFeedError('collect_failed', 'collect', {}); });
+    }, function (err) { if (XT.followMsg) XT.followMsg.textContent = 'Could not capture the screenshot: ' + (err && err.message ? err.message : err); });
   }
   function xtFeedAddStep(name, ok, label) {
     xtFeedMount();
@@ -1239,7 +1274,7 @@
     if ((name === 'send' || name === 'attach') && ok) {
       var haveShot = XT.feedSteps && XT.feedSteps.querySelector('[data-step=send],[data-step=attach]');
       var nf = d && typeof d.files === 'number' && d.files > 0 ? Math.min(50, d.files | 0) : 0;
-      var row = xtFeedAddStep(name, true, (name === 'send' && d && d.inline) ? 'Sent with the files as text (no screenshot)' : XT.followTurn ? (nf ? 'Uploaded ' + nf + (nf === 1 ? ' file' : ' files') : 'Message sent') : nf ? 'Uploaded screenshot + ' + nf + (nf === 1 ? ' file' : ' files') : 'Screenshot sent');
+      var row = xtFeedAddStep(name, true, (name === 'send' && d && d.inline) ? 'Sent with the files as text (no screenshot)' : XT.followTurn ? (nf ? 'Uploaded screenshot + ' + nf + (nf === 1 ? ' file' : ' files') : (XT.feedScroll && XT.feedScroll.querySelector('[data-role=feed-user][data-follow] img.thumb') ? 'Screenshot sent' : 'Message sent')) : nf ? 'Uploaded screenshot + ' + nf + (nf === 1 ? ' file' : ' files') : 'Screenshot sent');
       if (nf && row) row.setAttribute('data-files', String(nf));
       if (haveShot && row) row.style.display = 'none';
       if (XT.feedSteps && !XT.feedSteps.querySelector('[data-role=reading]')) {
@@ -1348,12 +1383,12 @@
     xtFeedScroll();
   }
   var XT_CSS = ':host{all:initial}*{box-sizing:border-box;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}'
-    + '.card{position:fixed;left:16px;bottom:16px;z-index:2147483646;width:min(360px,calc(100vw - 32px));background:#fff;color:#1d2a20;border-radius:12px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.28);font-size:13px;line-height:1.4}'
+    + '.card{position:fixed;left:16px;bottom:16px;z-index:2147483647;width:min(360px,calc(100vw - 32px));background:#fff;color:#1d2a20;border-radius:12px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.28);font-size:13px;line-height:1.4}'
     + '.card p{margin:0 0 8px}.row{display:flex;gap:6px;flex-wrap:wrap}.card a{color:#1f4d2b;font-weight:600}'
     + 'button{border:0;border-radius:8px;padding:7px 11px;font-size:13px;cursor:pointer;background:#eef2ec;color:#1d2a20}'
     + 'button.go{background:#1f4d2b;color:#fff;font-weight:600}button[disabled]{opacity:.5;cursor:default}.x{margin-left:auto;background:transparent}'
-    + '.files li.miss{color:#b42318;font-weight:700}button.blocked{background:#e5e7eb;color:#6b7280;cursor:not-allowed}'
-    + '.cd{font-weight:600;color:#8a4b00}.files{margin:0 0 8px;padding:0 0 0 16px;max-height:140px;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}';
+    + '.files li.miss{color:#b42318;font-weight:700}.files li.warn{color:#b45309;font-weight:600}button.blocked{background:#e5e7eb;color:#6b7280;cursor:not-allowed}'
+    + '.cd{font-weight:600;color:#8a4b00}.diagrow{margin:8px 0 0;font-size:11px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.diagrow .linkbtn{color:#1f4d2b}.diagrow [data-role=snap-status]{color:#4a5a4d}.files{margin:0 0 8px;padding:0 0 0 16px;max-height:140px;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}';
   function xtCard(text, buttons, link, items, state) {
     if (!XT.host) {
       XT.host = el('div', { id: 'dw-ext-actions', 'data-html2canvas-ignore': 'true' });
@@ -1369,7 +1404,10 @@
     if (items && items.length) {
       var ul = el('ul', { class: 'files', 'data-role': 'dw-ext-files' });
       items.forEach(function (it) {
-        var li = el('li', it.cls === 'miss' ? { 'data-path': it.path || '', class: 'miss', 'data-missing': '1' } : { 'data-path': it.path || '' }, it.text);
+        var liAttrs = { 'data-path': it.path || '' };
+        if (it.cls === 'miss') { liAttrs.class = 'miss'; liAttrs['data-missing'] = '1'; }
+        else if (it.cls === 'warn') { liAttrs.class = 'warn'; liAttrs['data-fallback'] = '1'; }
+        var li = el('li', liAttrs, it.text);
         if (it.href) { li.appendChild(document.createTextNode(' ')); li.appendChild(el('a', { href: it.href, target: '_blank', rel: 'noopener', 'data-act': it.act || 'link', 'data-path': it.path || '' }, it.linkText || 'Open')); }
         ul.appendChild(li);
       });
@@ -1382,6 +1420,16 @@
     close.addEventListener('click', function () { if (XT.box && XT.box.parentNode) XT.box.parentNode.removeChild(XT.box); XT.box = null; if (XT.cdTimer) { clearInterval(XT.cdTimer); XT.cdTimer = null; } });
     row.appendChild(close);
     XT.box.appendChild(row);
+    if (state === 'staged' || state === 'published' || state === 'unfinished') {
+      var tools = el('p', { class: 'diagrow', 'data-role': 'card-tools' });
+      var dBtn = el('button', { type: 'button', class: 'linkbtn', 'data-act': 'diag' }, 'Copy diagnostics');
+      dBtn.addEventListener('click', function () { xtCopyDiag(dBtn); });
+      var sBtn = el('button', { type: 'button', class: 'linkbtn', 'data-act': 'snapshot', title: 'Capture a structure snapshot of the paired AI tab' }, 'Send page snapshot');
+      var sSt = el('span', { 'data-role': 'snap-status' }, '');
+      sBtn.addEventListener('click', function () { xtSnapRun(sSt); });
+      tools.appendChild(dBtn); tools.appendChild(el('span', null, '\u00b7')); tools.appendChild(sBtn); tools.appendChild(sSt);
+      XT.box.appendChild(tools);
+    }
     XT.root.appendChild(XT.box);
   }
 
@@ -1681,7 +1729,7 @@
       ? xtLooseAssets(ups, sent, have).then(function (extra) { return xtCap(ups.concat(extra)); }, function () { return ups; })
       : Promise.resolve(ups);
     p.then(function (all) {
-      return xtCheckRefs(all, sent).then(function (chk) { return { all: all, chk: chk }; }, function () { return { all: all, chk: { missing: [], old: [], refs: {} } }; });
+      return xtCheckRefs(all, sent).then(function (chk) { return { all: all, chk: chk }; }, function () { return { all: all, chk: { missing: [], warn: [], old: [], refs: {}, groups: [] } }; });
     }).then(function (r) {
       r.chk.unplaced = gen.unplaced; r.chk.tags = d.assetsMissed ? d.assetsMissed.tags | 0 : 0;
       r.chk.unread = d.assetsMissed && Array.isArray(d.assetsMissed.names) ? d.assetsMissed.names.map(function (x) { return String(x.name || ''); }).filter(Boolean) : [];
@@ -1705,7 +1753,7 @@
     if (!assets.length) return res;
     var refs = [];
     ups.forEach(function (u) { if (typeof u.content === 'string' && (u.file.kind === 'html' || u.file.kind === 'css')) refs = refs.concat(xtAllRefs(u.content, u.file.path, u.file.kind)); });
-    var prevSt = xtStagedGet(); if (prevSt && Array.isArray(prevSt.missing)) refs = refs.concat(prevSt.missing);   // a follow-up that sends what was missing
+    var prevSt = xtStagedGet(); if (prevSt) refs = refs.concat(prevSt.missing || [], prevSt.warn || []);   // a follow-up can fill a missing file or a fallback warning
     var prose = xtProsePaths(d);
     assets.forEach(function (a) {
       var nm = a.name.toLowerCase();
@@ -1747,26 +1795,119 @@
     while ((m = re.exec(text))) out.push(m[2]);
     return out;
   }
-  function xtAllRefs(text, fromPath, kind) {
-    var raw = [];
+  function xtSrcsetParts(s) {
+    return String(s || '').split(',').map(function (c) { return c.trim().split(/\s+/)[0]; }).filter(Boolean);
+  }
+  // image-set(...) / -webkit-image-set(...) bodies, with start/end so their urls are not also counted as layers.
+  function xtCssImageSets(text) {
+    var out = [], re = /-webkit-image-set\(|(?:^|[\s:,])image-set\(/gi, m;
+    while ((m = re.exec(text))) {
+      var open = text.indexOf('(', m.index);
+      var depth = 1, i = open + 1;
+      for (; i < text.length && depth; i++) {
+        if (text[i] === '(') depth++;
+        else if (text[i] === ')') depth--;
+      }
+      out.push({ start: m.index, end: i, urls: xtCssUrls(text.slice(open + 1, i - 1)) });
+    }
+    return out;
+  }
+  // Groups of alternative URLs in CSS: one image-set, or the url() layers in one declaration.
+  function xtCssGroups(text) {
+    text = String(text || '').replace(/\/\*[\s\S]*?\*\//g, ' ');
+    var groups = [], masked = text, sets = xtCssImageSets(text), k;
+    for (k = sets.length - 1; k >= 0; k--) {
+      if (sets[k].urls.length) groups.push(sets[k].urls);
+      masked = masked.slice(0, sets[k].start) + ' ' + masked.slice(sets[k].end);
+    }
+    masked.split(/[;{}]/).forEach(function (decl) {
+      var urls = xtCssUrls(decl);
+      if (urls.length) groups.push(urls);
+    });
+    return groups;
+  }
+  // Groups of alternative paths. A group is a fallback set: one existing member is enough for the page to render.
+  function xtRefGroups(text, fromPath, kind) {
+    var groups = [];
     text = String(text || '');
-    if (kind === 'css') raw = xtCssUrls(text);
-    else {
+    if (kind === 'css') {
+      xtCssGroups(text).forEach(function (g) { groups.push(g); });
+    } else {
       var doc = null; try { doc = new DOMParser().parseFromString(text, 'text/html'); } catch (e) { doc = null; }
       if (doc) {
-        Array.prototype.forEach.call(doc.querySelectorAll('[src]'), function (n) { if (n.tagName !== 'SCRIPT' || !n.getAttribute('type') || /javascript|module/i.test(n.getAttribute('type'))) raw.push(n.getAttribute('src')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('[srcset]'), function (n) { String(n.getAttribute('srcset')).split(',').forEach(function (c) { raw.push(c.trim().split(/\s+/)[0]); }); });
-        Array.prototype.forEach.call(doc.querySelectorAll('[poster]'), function (n) { raw.push(n.getAttribute('poster')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('link[href]'), function (n) { if (!/canonical|alternate|preconnect|dns-prefetch|me\b/i.test(n.getAttribute('rel') || '')) raw.push(n.getAttribute('href')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('a[href]'), function (n) { raw.push(n.getAttribute('href')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('meta[content]'), function (n) { if (/image|icon/i.test((n.getAttribute('property') || '') + (n.getAttribute('name') || ''))) raw.push(n.getAttribute('content')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('style'), function (n) { raw = raw.concat(xtCssUrls(n.textContent || '')); });
-        Array.prototype.forEach.call(doc.querySelectorAll('[style]'), function (n) { raw = raw.concat(xtCssUrls(n.getAttribute('style') || '')); });
+        var taken = [];
+        function take(n) { if (n && taken.indexOf(n) < 0) taken.push(n); }
+        function takenHas(n) { return taken.indexOf(n) >= 0; }
+        function srcsetOf(n) { return n ? xtSrcsetParts(n.getAttribute('srcset')) : []; }
+        Array.prototype.forEach.call(doc.querySelectorAll('picture'), function (pic) {
+          var raw = [];
+          Array.prototype.forEach.call(pic.querySelectorAll('source, img'), function (n) {
+            take(n);
+            if (n.getAttribute('src')) raw.push(n.getAttribute('src'));
+            srcsetOf(n).forEach(function (u) { raw.push(u); });
+          });
+          if (raw.length) groups.push(raw);
+        });
+        Array.prototype.forEach.call(doc.querySelectorAll('img[srcset], source[srcset], img[src]'), function (n) {
+          if (takenHas(n)) return;
+          take(n);
+          var raw = srcsetOf(n);
+          if (n.getAttribute('src')) raw.push(n.getAttribute('src'));
+          if (raw.length) groups.push(raw);
+        });
+        Array.prototype.forEach.call(doc.querySelectorAll('[src]'), function (n) {
+          if (takenHas(n)) return;
+          if (n.tagName === 'SCRIPT' && n.getAttribute('type') && !/javascript|module/i.test(n.getAttribute('type'))) return;
+          take(n);
+          groups.push([n.getAttribute('src')]);
+        });
+        Array.prototype.forEach.call(doc.querySelectorAll('[poster]'), function (n) { groups.push([n.getAttribute('poster')]); });
+        Array.prototype.forEach.call(doc.querySelectorAll('link[href]'), function (n) { if (!/canonical|alternate|preconnect|dns-prefetch|me\b/i.test(n.getAttribute('rel') || '')) groups.push([n.getAttribute('href')]); });
+        Array.prototype.forEach.call(doc.querySelectorAll('a[href]'), function (n) { groups.push([n.getAttribute('href')]); });
+        Array.prototype.forEach.call(doc.querySelectorAll('meta[content]'), function (n) { if (/image|icon/i.test((n.getAttribute('property') || '') + (n.getAttribute('name') || ''))) groups.push([n.getAttribute('content')]); });
+        Array.prototype.forEach.call(doc.querySelectorAll('style'), function (n) { xtCssGroups(n.textContent || '').forEach(function (g) { groups.push(g); }); });
+        Array.prototype.forEach.call(doc.querySelectorAll('[style]'), function (n) { xtCssGroups(n.getAttribute('style') || '').forEach(function (g) { groups.push(g); }); });
       }
     }
+    return groups.map(function (g) {
+      var seen = {}, out = [];
+      g.forEach(function (r) { var p = xtResolveAny(r, fromPath); if (p && !seen[p]) { seen[p] = 1; out.push(p); } });
+      return out;
+    }).filter(function (g) { return g.length; });
+  }
+  function xtAllRefs(text, fromPath, kind) {
     var seen = {}, out = [];
-    raw.forEach(function (r) { var p = xtResolveAny(r, fromPath); if (p && !seen[p]) { seen[p] = 1; out.push(p); } });
+    xtRefGroups(text, fromPath, kind).forEach(function (g) {
+      g.forEach(function (p) { if (!seen[p]) { seen[p] = 1; out.push(p); } });
+    });
     return out;
+  }
+  // missing blocks Publish (no working alternative). warn = missing, but another candidate in the same <picture>,
+  // srcset, image-set() or url() layer exists.
+  function xtClassifyRefs(groups, missList, staged, before) {
+    var miss = {};
+    (missList || []).forEach(function (p) { miss[p] = 1; });
+    function present(p) { return !!(staged && staged[p]) || !miss[p]; }
+    var missing = [], warn = [], old = [], seenM = {}, seenW = {}, seenO = {};
+    function add(arr, seen, p) { if (!seen[p]) { seen[p] = 1; arr.push(p); } }
+    (groups || []).forEach(function (g) {
+      var gone = g.filter(function (p) { return !present(p); });
+      if (!gone.length) return;
+      var ok = gone.length < g.length;
+      gone.forEach(function (p) {
+        if (before && before[p]) add(old, seenO, p);
+        else if (ok) add(warn, seenW, p);
+        else add(missing, seenM, p);
+      });
+    });
+    warn = warn.filter(function (p) { return !seenM[p]; });
+    old = old.filter(function (p) { return !seenM[p] && !seenW[p]; });
+    return { missing: missing, warn: warn, old: old };
+  }
+  function xtBeforeMap(oldList) {
+    var b = {};
+    (oldList || []).forEach(function (p) { b[p] = 1; });
+    return b;
   }
   // HEAD each path (a few at a time). 404/410 = missing. A network error is not counted as missing.
   function xtCheckPaths(paths) {
@@ -1780,22 +1921,26 @@
     return Promise.all(lanes).then(function () { return list.filter(function (p) { return missing.indexOf(p) >= 0; }); });
   }
   // Links in the files about to be staged that are neither staged with them nor on the site. A link that the file
-  // already had before this edit (and that was already broken) is listed apart and does not block Publish.
+  // already had before this edit (and that was already broken) is listed apart and does not block Publish. A missing
+  // candidate that has a working fallback (another source, srcset entry, image-set item, or url() layer) is a warning.
   function xtCheckRefs(ups, sent) {
-    var staged = {}, refs = {}, before = {};
+    var staged = {}, refs = {}, before = {}, groups = [];
     ups.forEach(function (u) { staged[u.file.path] = 1; });
     var prev = xtStagedGet(); if (prev) prev.items.forEach(function (it) { staged[it.path] = 1; });
     ups.forEach(function (u) {
       if (typeof u.content !== 'string' || (u.file.kind !== 'html' && u.file.kind !== 'css')) return;
-      xtAllRefs(u.content, u.file.path, u.file.kind).forEach(function (p) { if (!staged[p]) refs[p] = (refs[p] || []).concat(u.file.path); });
+      var gs = xtRefGroups(u.content, u.file.path, u.file.kind);
+      gs.forEach(function (g) { groups.push(g); g.forEach(function (p) { if (!staged[p]) refs[p] = (refs[p] || []).concat(u.file.path); }); });
       var orig = (sent || []).filter(function (s) { return s.path === u.file.path && typeof s.text === 'string'; })[0];
       if (orig) xtAllRefs(orig.text, u.file.path, u.file.kind).forEach(function (p) { before[p] = 1; });
     });
     var paths = Object.keys(refs);
-    if (!paths.length) return Promise.resolve({ missing: [], old: [], refs: refs });
+    if (!paths.length) return Promise.resolve({ missing: [], warn: [], old: [], refs: refs, groups: groups });
     return xtCheckPaths(paths).then(function (miss) {
-      xtLog('refcheck', { refs: paths.length, missing: miss.length });
-      return { missing: miss.filter(function (p) { return !before[p]; }), old: miss.filter(function (p) { return before[p]; }), refs: refs };
+      var cls = xtClassifyRefs(groups, miss, staged, before);
+      xtLog('refcheck', { refs: paths.length, missing: cls.missing.length, warn: cls.warn.length });
+      cls.refs = refs; cls.groups = groups;
+      return cls;
     });
   }
   function xtDone2(d, ups, quiet, chk) {
@@ -1824,20 +1969,24 @@
       });
       var st = ok.length ? { exp: Date.now() + XT_TTL - 5000, items: items } : prev;   // every new staged upload restarts its own 10 minutes
       if (st) {
-        // v0.1.12: links that point nowhere. A file that should have been staged with this reply but failed counts too.
-        var miss = (chk.missing || []).slice();
-        bad.forEach(function (r) { if (chk.refs && chk.refs[r.item.file.path] && miss.indexOf(r.item.file.path) < 0) miss.push(r.item.file.path); });
+        // v0.1.14: links that point nowhere. A missing candidate with a working fallback is a warning, not a block.
         var stagedNow = {}; st.items.forEach(function (it) { stagedNow[it.path] = 1; });
-        (prev && prev.missing || []).forEach(function (p) { if (!stagedNow[p] && miss.indexOf(p) < 0) miss.push(p); });
-        st.missing = miss.filter(function (p) { return !stagedNow[p]; }).slice(0, 40);
-        st.oldMissing = (chk.old || []).slice(0, 20);
+        var missSet = (chk.missing || []).concat(chk.warn || []);
+        bad.forEach(function (r) { if (chk.refs && chk.refs[r.item.file.path] && missSet.indexOf(r.item.file.path) < 0) missSet.push(r.item.file.path); });
+        var cls = xtClassifyRefs(chk.groups || (prev && prev.groups) || [], missSet, stagedNow, xtBeforeMap(chk.old));
+        (prev && prev.missing || []).forEach(function (p) { if (!stagedNow[p] && cls.missing.indexOf(p) < 0 && cls.warn.indexOf(p) < 0) cls.missing.push(p); });
+        (prev && prev.warn || []).forEach(function (p) { if (!stagedNow[p] && cls.missing.indexOf(p) < 0 && cls.warn.indexOf(p) < 0) cls.warn.push(p); });
+        st.missing = cls.missing.filter(function (p) { return !stagedNow[p]; }).slice(0, 40);
+        st.warn = cls.warn.filter(function (p) { return !stagedNow[p]; }).slice(0, 40);
+        st.oldMissing = (cls.old || chk.old || []).slice(0, 20);
+        st.groups = chk.groups || (prev && prev.groups) || [];
         st.unplaced = (chk.unplaced || []).concat(chk.unread || []).slice(0, 12);
         st.tags = chk.tags | 0;
       }
       xtStagedSet(st);
       xtStagedCard(st, bad.length ? 'Not uploaded: ' + bad.map(function (r) { return r.item.file.path + ' (' + r.err + ')'; }).join(', ') + '.' : '', false);
       if (st) xtArmExpect(st);
-      if (!quiet) xtChime(ok.length && !(st && st.missing && st.missing.length) ? 'ok' : 'error');   // the reply is in and its files are staged
+      if (!quiet) xtChime(ok.length && !(st && st.missing && st.missing.length) ? 'ok' : 'error');   // warnings (fallback) do not use the error chime
     }, function (err) { xtFail(err); if (!quiet) xtChime('error'); });
   }
   // v0.1.13: for files the server fingerprinted, check the live file is still what this session started from; if so its
@@ -1865,10 +2014,14 @@
     var items = st.items.map(function (it) {
       return { text: it.path + (it.isNew ? ' (new)' : '') + (it.mine ? ' \u00b7 your file' : ''), path: it.path, href: location.origin + it.path, act: 'preview', linkText: 'Open preview' };
     });
-    // v0.1.12: a staged file that links to a file which does not exist cannot be published.
+    // v0.1.14: a staged file that links to a file with no working fallback cannot be published. A missing
+    // source/srcset/image-set/url() candidate that has a fallback is a warning; Publish stays on.
     var missing = Array.isArray(st.missing) ? st.missing : [];
+    var warn = Array.isArray(st.warn) ? st.warn : [];
     missing.forEach(function (p) { items.push({ text: 'MISSING: ' + p, path: p, cls: 'miss' }); });
+    warn.forEach(function (p) { items.push({ text: 'missing (has fallback): ' + p, path: p, cls: 'warn' }); });
     if (missing.length) msg = 'Publish is blocked: the new version links to ' + (missing.length === 1 ? 'a file that is' : missing.length + ' files that are') + ' not on the site and ' + (missing.length === 1 ? 'was' : 'were') + ' not sent back by ' + xtAiName(XT.ai) + ' (marked MISSING below). Ask ' + xtAiName(XT.ai) + ' for ' + (missing.length === 1 ? 'it' : 'them') + ' in the follow-up box, or attach the file, then press Check again. ' + msg;
+    else if (warn.length) msg = 'The new version links to ' + (warn.length === 1 ? 'a file that is' : warn.length + ' files that are') + ' not on the site (marked below as missing, with a fallback in place), so the page can still render. Ask ' + xtAiName(XT.ai) + ' for ' + (warn.length === 1 ? 'it' : 'them') + ' in the follow-up box if you want ' + (warn.length === 1 ? 'it' : 'them') + ' too. ' + msg;
     if (Array.isArray(st.oldMissing) && st.oldMissing.length) msg += ' Already broken before this edit (not blocking): ' + st.oldMissing.join(', ') + '.';
     if (Array.isArray(st.unplaced) && st.unplaced.length) msg += ' ' + xtAiName(XT.ai) + ' made ' + st.unplaced.join(', ') + ' but it was not used (its name is not linked anywhere, or it could not be read).';
     var conflict = Array.isArray(st.conflict) ? st.conflict : [];
@@ -1876,7 +2029,18 @@
     if (conflict.length) msg = (conflict.length === 1 ? conflict[0] + ' changed' : conflict.length + ' files changed') + ' on the live site since you opened it (marked below), by someone else or another tab. Publishing now would replace those changes. Reload to see the live version, or press Overwrite anyway. ' + msg;
     var check = { act: 'recheck', label: 'Check again', fn: function (b) {
       b.disabled = true; b.textContent = 'Checking\u2026';
-      xtCheckPaths(missing).then(function (still) { var cur = xtStagedGet() || st; cur.missing = still; xtStagedSet(cur); xtStagedCard(cur, still.length ? '' : 'All linked files are there now.', reloaded); });
+      var cur0 = xtStagedGet() || st;
+      var stagedNow = {}; (cur0.items || []).forEach(function (it) { stagedNow[it.path] = 1; });
+      var paths = [], seen = {};
+      (cur0.groups || []).forEach(function (g) { g.forEach(function (p) { if (!stagedNow[p] && !seen[p]) { seen[p] = 1; paths.push(p); } }); });
+      (cur0.missing || []).concat(cur0.warn || []).forEach(function (p) { if (!stagedNow[p] && !seen[p]) { seen[p] = 1; paths.push(p); } });
+      xtCheckPaths(paths).then(function (still) {
+        var cur = xtStagedGet() || cur0;
+        var now = {}; (cur.items || []).forEach(function (it) { now[it.path] = 1; });
+        var cls = xtClassifyRefs(cur.groups || [], still, now, xtBeforeMap(cur.oldMissing));
+        cur.missing = cls.missing; cur.warn = cls.warn; cur.oldMissing = cls.old;
+        xtStagedSet(cur); xtStagedCard(cur, cls.missing.length || cls.warn.length ? '' : 'All linked files are there now.', reloaded);
+      });
     } };
     xtCard(msg, [
       missing.length ? { act: 'publish', label: 'Publish blocked', cls: 'blocked', fn: function () {} } :
@@ -1902,7 +2066,7 @@
         xtEach(st.items, function (it) { return xtCall({ action: 'discard_staging', id: it.id }); }).then(xtDiscarded, xtFail);
       } },
       { act: 'reload', label: reloaded ? 'Reload preview' : (here ? 'Show preview (reload)' : 'Reload page'), fn: function () { location.reload(); } }
-    ].concat(missing.length ? [check] : []), null, items, 'staged');
+    ].concat((missing.length || warn.length) ? [check] : []), null, items, 'staged');
     if (conflict.length && XT.box) XT.box.setAttribute('data-conflict', '1');
     if (missing.length && XT.box) { XT.box.setAttribute('data-blocked', '1'); var pb = XT.box.querySelector('[data-act=publish]'); if (pb) { pb.disabled = true; pb.setAttribute('aria-disabled', 'true'); pb.title = 'Blocked: some linked files are missing'; } }
     xtTick(st.exp);
@@ -2069,11 +2233,13 @@
   function on(target, type, fn, opts) { target.addEventListener(type, fn, opts); offs.push(function () { target.removeEventListener(type, fn, opts); }); }
   function add(n) { root.appendChild(n); nodes.push(n); return n; }
 
-  function start() {
+  function start(opts) {
+    opts = opts || {};
     if (active || sending || !ui.fab) return;
     active = true;
+    XT.followMarkup = !!opts.followUp;
     try {
-      if (location.hash === '#suggest-edit' && history.replaceState) history.replaceState(null, '', location.pathname + location.search);
+      if (!XT.followMarkup && location.hash === '#suggest-edit' && history.replaceState) history.replaceState(null, '', location.pathname + location.search);
       shapes = []; cur = null; ptrs = {}; pan = null; nodes = []; offs = [];
       ui.fab.style.display = 'none';
       ui.dim = add(el('div', { class: 'dim' }));
@@ -2081,7 +2247,7 @@
       dpr = Math.min(window.devicePixelRatio || 1, 3);
       ctx = cv.getContext('2d');
       sizeCanvas();
-      ui.bar = el('div', { class: 'bar', role: 'toolbar', 'aria-label': 'Markup tools' });
+      ui.bar = el('div', { class: 'bar', role: 'toolbar', 'aria-label': XT.followMarkup ? 'Markup tools for this follow-up' : 'Markup tools' });
       ui.toolBtns = {};
       TOOLS.forEach(function (t) {
         var b = btn({ 'data-tool': t[0], title: t[0] === 'pan' ? 'Scroll the page (drag)' : t[2] }, t[1], t[2]);
@@ -2090,12 +2256,21 @@
       });
       ui.bar.appendChild(el('span', { class: 'sep' }));
       var undo = btn({ 'data-act': 'undo', title: 'Undo' }, '\u21B6', 'Undo');
-      undo.addEventListener('click', function () { shapes.pop(); redraw(); });
+      undo.addEventListener('click', function () { shapes.pop(); redraw(); xsDraftSoon(); });
+      ui.bar.appendChild(undo);
+      if (XT.followMarkup) {
+        var hide = btn({ 'data-act': 'hide-markup', title: 'Hide the markup tools. Your follow-up can still be sent without a new screenshot.' }, '\u2715', 'Hide tools');
+        hide.addEventListener('click', function () { stop(); });
+        ui.bar.appendChild(hide);
+        add(ui.bar);
+        ui.hint = add(el('div', { class: 'hint' }, 'Mark up this page or the staged preview (arrow, box, pen, and the others). Your follow-up will send the new screenshot.'));
+        setTimeout(function () { if (ui.hint && ui.hint.parentNode) ui.hint.parentNode.removeChild(ui.hint); }, 6000);
+      } else {
       var cancel = btn({ 'data-act': 'cancel', title: 'Cancel' }, '\u2715', 'Cancel');
       cancel.addEventListener('click', stop);
       var send = btn({ class: 'send', 'data-act': 'send', title: 'Send' }, '\u27A4', 'Send');
       send.addEventListener('click', submit);
-      ui.bar.appendChild(undo); ui.bar.appendChild(cancel); ui.bar.appendChild(send);
+      ui.bar.appendChild(cancel); ui.bar.appendChild(send);
       add(ui.bar);
       ui.note = el('div', { class: 'notebox' });
       ui.note.appendChild(el('label', { for: 'dw-mk-note' }, 'What should change?'));
@@ -2143,10 +2318,13 @@
       ui.hint = add(el('div', { class: 'hint' }, ('ontouchstart' in window || navigator.maxTouchPoints > 0)
         ? 'Scroll with two fingers, or pick \u270B Scroll.' : 'Scroll with the mouse wheel or trackpad, or pick \u270B Scroll.'));
       setTimeout(function () { if (ui.hint && ui.hint.parentNode) ui.hint.parentNode.removeChild(ui.hint); }, 6000);
+      } // first-send note box
       setTool(tool && TOOLS.some(function (t) { return t[0] === tool; }) ? tool : 'pen');
-      on(window, 'dragover', xtDragOver);
-      on(window, 'dragleave', xtDragLeave);
-      on(window, 'drop', xtDrop);
+      if (!XT.followMarkup) {
+        on(window, 'dragover', xtDragOver);
+        on(window, 'dragleave', xtDragLeave);
+        on(window, 'drop', xtDrop);
+      }
       on(cv, 'pointerdown', down);
       on(cv, 'pointermove', move);
       on(window, 'pointerup', up);
@@ -2157,9 +2335,11 @@
       // the canvas is touch-action:none, so stop the browser's own touch gestures there; two fingers scroll via down/move
       on(cv, 'touchmove', prevent, { passive: false });
       redraw();
-      xsDraftSave(true);
-      // reopening after Close: bring back the chat panel too
-      if (!XT.feedHost) xtRestoreFeed();
+      if (!XT.followMarkup) {
+        xsDraftSave(true);
+        if (!XT.feedHost) xtRestoreFeed();                                      // reopening after Close: bring back the chat panel too
+      }
+      xtFollowMarkupPaint();
     } catch (err) {
       stop();
       toast('Could not start markup: ' + (err && err.message ? err.message : err), 6000);
@@ -2182,9 +2362,11 @@
 
   // Leave edit mode completely: drop every node and listener we added and bring the button back.
   function stop() {
-    if (active) { if (XS.sent) xsDel('draft'); else xsDraftSave(false); }       // v0.1.13: Close keeps the draft for next time
+    var wasFollow = !!XT.followMarkup;
+    if (active && !wasFollow) { if (XS.sent) xsDel('draft'); else xsDraftSave(false); }   // v0.1.13: Close keeps the draft for next time
     XS.sent = false;
     active = false;
+    XT.followMarkup = false;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     offs.forEach(function (f) { try { f(); } catch (e) {} });
     offs = [];
@@ -2195,6 +2377,7 @@
     ui.attOpt = ui.attBtn = ui.attInput = ui.attHint = ui.attMsg = ui.attList = null; XT_ATT = [];
     cv = ctx = null; cur = null; pan = null; ptrs = {}; shapes = [];
     if (ui.fab) ui.fab.style.display = '';
+    xtFollowMarkupPaint();
   }
 
   function setTool(t) {
@@ -2408,6 +2591,48 @@
     var d = el('div', { class: 'toast', role: 'status' }, t);
     root.appendChild(d);
     setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, ms || 4000);
+  }
+
+  // Used by a follow-up send: capture the current page or staged preview with the markup drawn on top.
+  function xtCaptureShot() {
+    if (!active || !cv) return Promise.reject(new Error('markup is not open'));
+    if (ui.textInput) commitText();
+    var vw = document.documentElement.clientWidth || window.innerWidth, vh = window.innerHeight;
+    var sx = window.scrollX, sy = window.scrollY;
+    var r = captureRect();
+    if (ui.bar) ui.bar.style.visibility = 'hidden';
+    if (ui.note) ui.note.style.visibility = 'hidden';
+    var scale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / Math.max(1, r.w * r.h)), MAX_SIDE / Math.max(1, r.h), MAX_SIDE / Math.max(1, r.w));
+    return loadH2C().then(function (h2c) {
+      return loadLazyImages(r).then(function () {
+        return h2c(document.body, {
+          x: r.x, y: r.y, width: r.w, height: r.h,
+          scrollX: 0, scrollY: 0,
+          windowWidth: vw, windowHeight: vh,
+          scale: scale, useCORS: true, logging: false, backgroundColor: '#ffffff',
+          ignoreElements: function (n) { return n === host || (n && n.getAttribute && n.getAttribute('data-html2canvas-ignore') === 'true'); }
+        });
+      });
+    }).then(function (shot) {
+      var out = document.createElement('canvas');
+      out.width = shot.width; out.height = shot.height;
+      var c = out.getContext('2d');
+      c.drawImage(shot, 0, 0);
+      var k = shot.width / r.w;
+      shapes.forEach(function (s) { drawShape(c, s, k, r.x, r.y); });
+      return toBlob(out, 'image/jpeg', 0.85).then(function (b) {
+        return b && b.size > 9 * 1024 * 1024 ? toBlob(out, 'image/jpeg', 0.55) : b;
+      });
+    }).then(function (blob) {
+      if (ui.bar) ui.bar.style.visibility = '';
+      if (ui.note) ui.note.style.visibility = '';
+      if (!blob) throw new Error('could not make the screenshot');
+      return { blob: blob, rect: r, vw: vw, vh: vh, sx: sx, sy: sy, sels: selectors() };
+    }, function (err) {
+      if (ui.bar) ui.bar.style.visibility = '';
+      if (ui.note) ui.note.style.visibility = '';
+      throw err;
+    });
   }
 
   function submit() {

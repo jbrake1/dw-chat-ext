@@ -24,6 +24,8 @@ test('markup.js: relay log persists in sessionStorage, restores a note after a r
   assert.ok(/xtRestoreRelayNote\(\); \}/.test(s), 'restore runs when the editor mounts');
   assert.ok(s.includes("xtPost('dw-ext-diag'") && s.includes('dw-ext-diag-result'));
   assert.ok(s.includes('Copy diagnostics'));
+  assert.ok(s.includes('xtFeedToolsMount') && s.includes("'data-role': 'feed-tools'") && s.includes('card-tools'), 'buttons in the chat header and on the preview panel');
+  assert.ok(s.includes('Mark up this page') && s.includes('xtCaptureShot'), 'follow-up markup tools');
   // the log never stores note text, replies or screenshots
   assert.ok(!/xtLog\([^)]*(note|screenshot|text:)/.test(s.replace(/xtLog\('submit_start'[^\n]*\n/, '')));
 });
@@ -66,8 +68,8 @@ test('sw.js: persisted relay log, diagnostics snapshot, injection into already-o
   assert.ok(/case 'popup:diag': if \(!fromExt\) return/.test(s));
 });
 
-test('popup has a Copy diagnostics button; manifest is 0.1.13', () => {
+test('popup has a Copy diagnostics button; manifest is 0.1.14', () => {
   assert.ok(read('extension/popup/popup.html').includes('id="diag"'));
   assert.ok(read('extension/popup/popup.js').includes('popup:diag'));
-  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.13');
+  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.14');
 });

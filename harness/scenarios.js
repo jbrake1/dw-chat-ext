@@ -833,6 +833,90 @@ scenarios['gemini-missing-blocks-publish'] = async (env) => {
   return c.steps;
 };
 
+// v0.1.14: James's case — a missing <source srcset> webp where Gemini sent the <img> jpeg fallback.
+// Publish stays on; the webp is listed as "missing (has fallback)".
+scenarios['fallback-warning-family'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=family&chips=1');
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const card = await L.waitFor(async () => dw.evaluate(() => {
+    const r = document.getElementById('dw-ext-actions'); const sr = r && r.shadowRoot; const box = sr && sr.querySelector('[data-state=staged]');
+    const pub = box && box.querySelector('[data-act=publish]');
+    const feed = document.getElementById('dw-ext-feed'); const fsr = feed && feed.shadowRoot;
+    return pub ? {
+      pub: pub.textContent, disabled: pub.disabled,
+      missing: [...sr.querySelectorAll('[data-missing]')].map((x) => x.textContent),
+      warn: [...sr.querySelectorAll('[data-fallback]')].map((x) => x.textContent),
+      diag: !!(box.querySelector('[data-role=card-tools] [data-act=diag]') && box.querySelector('[data-role=card-tools] [data-act=snapshot]')),
+      headerDiag: !!(fsr && fsr.querySelector('[data-role=feed-tools] [data-act=diag]') && fsr.querySelector('[data-role=feed-tools] [data-act=snapshot]')),
+      text: box.textContent.slice(0, 800)
+    } : null;
+  }), 20000, 'staged card').catch((e) => ({ error: String(e) }));
+  c.check('publish_stays_on', card && card.disabled === false && /Publish/.test(card.pub || '') && !/blocked/i.test(card.pub || ''), card);
+  c.check('no_blocking_missing', card && Array.isArray(card.missing) && card.missing.length === 0, card);
+  c.check('webp_listed_as_fallback_warning', card && Array.isArray(card.warn) && card.warn.some((t) => /missing \(has fallback\): \/assets\/img\/family-working-at-home\.webp/.test(t)), card);
+  c.check('diagnostics_in_header_and_panel', card && card.diag && card.headerDiag, card);
+  const staged = (env.mock.state.staged || []).filter((x) => x.action === 'create').map((x) => x.file_name || ((x.file_path ? x.file_path + '/' : '') + (x.file_name || '')));
+  c.check('jpeg_and_page_were_staged', staged.some((n) => /Gemini_Generated_Image_a1b2c3d4e5f6\.jpeg/.test(n)) && staged.some((n) => /(index|editor)\.html/.test(n)), staged);
+  return c.steps;
+};
+
+// v0.1.14: from the follow-up box, Mark up this page brings back arrow, box and the other tools; the follow-up
+// sends the new marked-up screenshot into the same chat.
+scenarios['followup-markup'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await setNewChatUrl(env, 'grok', env.mock.grokUrl + '/?speed=15&tokens=14&code=0');
+  await env.sw.evaluate(() => self.__dw.setProvider('grok'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { note: 'First send TOK-M1', timeout: 60000 });
+  c.check('first_reply_done', out.done === 'complete', out);
+  const tools = await L.waitFor(async () => dw.evaluate(() => {
+    const sr = document.getElementById('dw-ext-feed').shadowRoot;
+    const fu = sr.querySelector('[data-role=feed-followup]');
+    const btn = sr.querySelector('[data-act=followup-markup]');
+    return fu && fu.style.display !== 'none' && btn ? { label: btn.textContent, header: !!sr.querySelector('[data-role=feed-tools] [data-act=diag]') } : null;
+  }), 15000, 'follow-up box').catch(() => null);
+  c.check('mark_up_this_page_offered', !!(tools && tools.label === 'Mark up this page' && tools.header), tools);
+  await dw.evaluate(() => document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-act=followup-markup]').click());
+  const bar = await L.waitFor(async () => dw.evaluate(() => {
+    const r = document.getElementById('dw-markup-root'); const sr = r && r.shadowRoot; const b = sr && sr.querySelector('.bar');
+    return b ? { tools: [...b.querySelectorAll('[data-tool]')].map((x) => x.getAttribute('data-tool')), hide: !!b.querySelector('[data-act=hide-markup]') } : null;
+  }), 8000, 'markup toolbar').catch(() => null);
+  c.check('followup_tools_are_the_same', !!(bar && bar.hide && bar.tools.join() === 'pen,arrow,box,text,highlight,pan'), bar);
+  await dw.evaluate(() => {
+    const sr = document.getElementById('dw-markup-root').shadowRoot;
+    sr.querySelector('[data-tool=box]').click();
+    const cv = sr.querySelector('canvas');
+    const down = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, { pointerId: 1, bubbles: true, clientX: x, clientY: y, pointerType: 'mouse', buttons: 1 }));
+    down('pointerdown', 80, 80); down('pointermove', 180, 140); down('pointerup', 180, 140);
+  });
+  await dw.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; sr.querySelectorAll('[data-role=reply]').forEach((r) => r.setAttribute('data-e2e-before', '1')); sr.querySelector('[data-role=followup-text]').value = 'Move this box TOK-M2'; });
+  await dw.evaluate(() => document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-act=followup-send]').click());
+  const out2 = await L.waitFor(async () => dw.evaluate(() => {
+    const sr = document.getElementById('dw-ext-feed').shadowRoot;
+    const r = sr.querySelector('[data-role=reply][data-done]:not([data-e2e-before])');
+    const e = sr.querySelector('[data-role=error]:not([data-old])');
+    const thumb = sr.querySelector('[data-role=feed-user][data-follow] img.thumb');
+    return r ? { done: r.getAttribute('data-done'), thumb: !!thumb } : e ? { error: e.textContent } : null;
+  }), 60000, 'follow-up reply').catch((e) => ({ error: String(e) }));
+  c.check('followup_reply_done', out2 && out2.done === 'complete' && out2.thumb, out2);
+  const gp = env.ctx.pages().filter((p) => p.url().startsWith(env.mock.grokUrl));
+  const g = gp.length ? await gp[0].evaluate(() => ({ n: (window.__received || []).length, newChat: window.__newChat || 0, last: ((window.__received || []).slice(-1)[0] || {}), files: ((window.__received || []).slice(-1)[0] || {}).files || [] })) : null;
+  c.check('followup_same_chat_with_screenshot', !!(g && g.n === 2 && g.newChat === 0 && /TOK-M2|Move this box/.test(g.last.text || '') && (g.files || []).some((f) => /image\//.test(f.type || '') || /\.jpe?g$/i.test(f.name || ''))), g);
+  return c.steps;
+};
+
 // v0.1.13: "Add 10 min" on the Publish-blocked staged card: the server extends every staged file, the countdown
 // follows, repeated presses stop at the 60-minute cap, and the longer countdown survives a reload.
 scenarios['staged-extend'] = async (env) => {

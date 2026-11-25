@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.14 — 2026-11-25
+
+- **Missing files with a fallback no longer block Publish.** In a `<picture>`, a missing `<source srcset>` candidate is a warning when the `<img>` (or another source) exists — the case of a generated JPEG used as the fallback while a `.webp` source 404s. The same applies to `srcset` entries where at least one candidate exists, CSS `image-set()` with an existing alternative, and `url()` layers with an existing fallback. Warnings show as **missing (has fallback): path** in amber and Publish stays on. Only a reference with no working alternative is marked **MISSING** and blocks Publish.
+- **Copy diagnostics and Send page snapshot** are in the chat window header (always, not only after an error) and as small links on the preview/Publish panel. Send page snapshot from the editor captures the paired AI tab, same as the popup.
+- **Markup tools on follow-ups.** From the follow-up box, **Mark up this page** brings back the same tools as the first send (pen, arrow, box, text, highlight, scroll). You can mark up the current page or the staged preview; the follow-up sends the new screenshot (plus your note and, optionally, the page files) into the same AI chat.
+
 ## v0.1.13 — 2026-11-25
 
 - **Grok and Claude.** Suggest an edit can now send to Grok (grok.com) and Claude (claude.ai) as well as ChatGPT and Gemini. Pick the AI in the editor's AI picker (or the popup). Each has its own sealed instructions file (`instructions/grok.json` rev 1 and `instructions/claude.json` rev 1, published at `/editor-ai/patterns/grok.json` and `/editor-ai/patterns/claude.json`), with the same flow: pairing, screenshot, note and page files as attachments, streamed reply with code and raw-HTML pages, generated file chips, follow-ups in the same chat, chime, stall timeout, Stop, usage-limit detection, Copy diagnostics and Send page snapshot. The extension only creates chats on these sites; it never deletes, renames, shares or archives a chat, changes settings, or clicks Upgrade.
