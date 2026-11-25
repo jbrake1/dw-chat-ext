@@ -477,6 +477,10 @@
     var target = (steps.assistantMessage.pick === 'first-new') ? msgs[baseline] : msgs[msgs.length - 1];
     var SHOW_TEXT = 4, between = '', inPre = null;
     var bcfg = steps.blocks || {};
+    if (bcfg.markdownText) {
+      var tr0 = steps.assistantMessage.textSelectors && steps.assistantMessage.textSelectors.length ? resolve(target, steps.assistantMessage.textSelectors) : { el: null };
+      return replyMarkdown(win, doc, tr0.el || target, instr, true).blocks;
+    }
     // v0.1.6: text inside these elements (code-block headers such as a language chip or copy button) is not part of
     // the "File: /path" label; langSelectors read the language from such a header when <code> has no language- class.
     var ignored = new Set();
@@ -512,6 +516,108 @@
     return out;
   }
 
+
+  // ---------- v0.1.10: reply text as markdown, code blocks as fences, raw HTML recovered ----------
+  // textOf() flattens a reply: a code block becomes plain paragraphs (and a whole HTML page shows up as raw source lines).
+  // With instructions steps.blocks.markdownText the reply is walked instead: <pre> becomes a ```lang fence (shown as a
+  // collapsed code block in the chat window), headings, lists, bold, inline code and https links become markdown, and
+  // header chrome (copy buttons, language chips, icons) is left out. When the model put HTML into ordinary paragraphs
+  // instead of a code block (it happens on Gemini), that run of lines is fenced too, and a whole document in it
+  // (<!doctype>/<html>...</html>) also becomes a block, so it can be staged like any other file.
+  var MD_BLOCK = /^(P|DIV|SECTION|ARTICLE|ASIDE|HEADER|FOOTER|MAIN|NAV|UL|OL|LI|H[1-6]|TABLE|THEAD|TBODY|TR|BLOCKQUOTE|HR|FIGURE|DETAILS|SUMMARY|CODE-BLOCK|MESSAGE-CONTENT|RESPONSE-ELEMENT|TABLE-BLOCK)$/;
+  var RAW_LINE = /^\s*<[A-Za-z!\/]/;
+  function plainLabel(s) { return norm(String(s).replace(/\*\*|[`*]/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')).slice(-BLOCK_LIM.label); }
+  function fenceSafe(code) { return String(code).replace(/```/g, '`\u200b``'); }
+  function trimNl(s) { return String(s).replace(/^\n+/, '').replace(/\n+$/, ''); }
+  function detectRawHtml(normalText, pushBlock) {
+    // normalText: markdown-ish text WITHOUT fences. Returns text with raw HTML runs fenced; pushBlock(label, lang, code) for whole documents.
+    var lines = String(normalText).split('\n'), out = [], i = 0, label = '';
+    function isRaw(l) { return RAW_LINE.test(l); }
+    while (i < lines.length) {
+      if (!isRaw(lines[i])) { out.push(lines[i]); i++; continue; }
+      var j = i, lastRaw = i, raws = 0;
+      while (j < lines.length) {
+        var l = lines[j];
+        if (l.trim() === '') { j++; continue; }
+        if (isRaw(l) || /<\/?[A-Za-z][^>]*>\s*$/.test(l)) { if (isRaw(l)) raws++; lastRaw = j; j++; continue; }
+        break;
+      }
+      var run = lines.slice(i, lastRaw + 1).filter(function (l) { return l.trim() !== ''; }).join('\n');
+      if (raws >= 3 && run.length >= 200) {
+        var prior = plainLabel(out.join(' '));
+        var whole = /(?:<!doctype html[^>]*>\s*)?<html[\s>][\s\S]*<\/html>/i.exec(run);
+        if (whole && pushBlock) pushBlock(prior, 'html', whole[0].trim() + '\n');
+        out.push('', '```html', fenceSafe(trimNl(run)), '```', '');
+        i = lastRaw + 1;
+      } else { out.push(lines[i]); i++; }
+    }
+    return out.join('\n');
+  }
+  function replyMarkdown(win, doc, root, instr, wantBlocks) {
+    var bcfg = (instr.steps && instr.steps.blocks) || {};
+    var ignored = new Set();
+    (bcfg.ignoreSelectors || []).forEach(function (sel) { matchOne(root, sel).forEach(function (e) { ignored.add(e); }); });
+    var segs = [], buf = '', blocks = [], total = 0, between = '';
+    function flush() { if (buf) { segs.push({ t: buf }); between += buf; if (between.length > 4000) between = between.slice(-4000); buf = ''; } }
+    function langNear(pre) {
+      if (!bcfg.langSelectors) return '';
+      var e = pre.parentNode;
+      for (var k = 0; k < 5 && e && e !== root; k++, e = e.parentNode) {
+        var r = resolve(e, bcfg.langSelectors);
+        if (r.el && !r.el.contains(pre)) { var t = norm(r.el.textContent).toLowerCase(); return /^[a-z0-9+#._-]{1,20}$/.test(t) ? t : ''; }
+      }
+      return '';
+    }
+    function pre(p) {
+      var code = p.querySelector('code');
+      var text = code ? code.textContent : textOf(p).replace(/^[^\n]{0,24}\n(?:Copy(?: code)?\n)?/, '');
+      var lm = /(?:^|\s)language-([A-Za-z0-9+#._-]{1,20})/.exec((code && code.getAttribute('class')) || '');
+      var lang = lm ? lm[1].toLowerCase() : langNear(p);
+      flush();
+      if (wantBlocks && blocks.length < BLOCK_LIM.blocks && text.length <= BLOCK_LIM.code && total + text.length <= BLOCK_LIM.total) {
+        total += text.length; blocks.push({ label: plainLabel(between), lang: lang, code: text });
+      }
+      between = '';
+      segs.push({ fence: true, t: '```' + lang + '\n' + fenceSafe(trimNl(text)) + '\n```' });
+    }
+    function walk(n) {
+      if (n.nodeType === 3) { buf += n.data.replace(/\s+/g, ' '); return; }
+      if (n.nodeType !== 1) return;
+      if (ignored.has(n)) return;
+      var tag = n.nodeName.toUpperCase();
+      if (tag === 'SCRIPT' || tag === 'STYLE') return;
+      if (tag === 'PRE') { pre(n); return; }
+      if (tag === 'BR') { buf += '\n'; return; }
+      var block = MD_BLOCK.test(tag), gap = tag === 'LI' ? '\n' : '\n\n';
+      if (block) buf += (tag === 'LI' && /\n$/.test(buf)) ? '' : gap;
+      var pfx = '', sfx = '';
+      if (tag === 'LI') pfx = (n.parentNode && n.parentNode.nodeName === 'OL') ? (1 + Array.prototype.indexOf.call(n.parentNode.children, n)) + '. ' : '- ';
+      else if (/^H[1-3]$/.test(tag)) pfx = '## ';
+      else if (tag === 'STRONG' || tag === 'B') { pfx = '**'; sfx = '**'; }
+      else if (tag === 'EM' || tag === 'I') { pfx = '*'; sfx = '*'; }
+      else if (tag === 'CODE') { pfx = '`'; sfx = '`'; }
+      buf += pfx;
+      var href = tag === 'A' ? (n.getAttribute('href') || '') : '';
+      var start = buf.length;
+      for (var c = n.firstChild; c; c = c.nextSibling) walk(c);
+      if (tag === 'A' && /^https:\/\//i.test(href) && buf.length > start) { var label = buf.slice(start).trim(); if (label && !/[\[\]\n]/.test(label)) buf = buf.slice(0, start) + '[' + label + '](' + href + ')'; }
+      buf += sfx;
+      if (block) buf += gap;
+    }
+    walk(root);
+    flush();
+    var parts = [];
+    var pending = [];
+    function addBlock(label, lang, code) { if (wantBlocks && blocks.length < BLOCK_LIM.blocks) blocks.push({ label: label, lang: lang, code: code }); }
+    segs.forEach(function (s) {
+      if (s.fence) { parts.push(s.t); return; }
+      var t = s.t.replace(/[ \t]*\n[ \t]*/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n');
+      parts.push(detectRawHtml(t, addBlock));
+    });
+    var text = parts.join('\n\n').replace(/\n{3,}/g, '\n\n').replace(/^[ \t]*\n/, '').trim();
+    return { text: text, blocks: blocks };
+  }
+
   // v0.1.6: the first known notice (limit, sign-in, error banner) on the page, or null. Same entries as steps.errors.
   function readNotice(doc, instr) {
     var code = null;
@@ -535,7 +641,8 @@
     if (target) {
       var tsel = steps.assistantMessage.textSelectors;
       var tr = tsel && tsel.length ? resolve(target, tsel) : { el: null };
-      text = textOf(tr.el || target).trim();
+      if (steps.blocks && steps.blocks.markdownText) { try { text = replyMarkdown(win, doc, tr.el || target, instr, false).text; } catch (e) { text = textOf(tr.el || target).trim(); } }
+      else text = textOf(tr.el || target).trim();
       if (elementMap) elementMap.clear();
       files = readFiles(win, target, steps.files, elementMap);
     }
@@ -603,7 +710,7 @@
 
   return {
     StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
-    isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, inlineFilesText: inlineFilesText, growth: growth, clickSend: clickSend,
+    isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, replyMarkdown: replyMarkdown, inlineFilesText: inlineFilesText, growth: growth, clickSend: clickSend,
     readNotice: readNotice, waitUntil: waitUntil, safeClick: safeClick, blockedByGuard: blockedByGuard,
     readState: readState, detectLimit: detectLimit, limitMatch: limitMatch, limitWhen: limitWhen, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
   };

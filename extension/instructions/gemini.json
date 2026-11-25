@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "site": "gemini",
-  "revision": 2,
-  "version": "2026.11.24-2",
-  "minExtVersion": "0.1.9",
+  "revision": 3,
+  "version": "2026.11.24-3",
+  "minExtVersion": "0.1.10",
   "verified": false,
-  "notes": "UNVERIFIED against a live signed-in gemini.google.com: built 2026-11-24 from public knowledge of Gemini's web DOM (Angular custom elements: rich-textarea with a Quill .ql-editor, uploader + 'Open upload file menu' button, send-button / Stop response, user-query and model-response turns, message-content .markdown, code-block with a .code-block-decoration header) plus saved fixtures (harness/snapshots/gemini-fixture-*.html). The owner's screenshot (Pro plan, 2026-11-24) shows the home page 'Where should we start?', an 'Ask Gemini' input, a '+' upload/tools button on its left, a model picker and a mic button. The guard keeps the runner off the model picker, Upgrade, Get app, share/delete/rename/settings. Every step lists fallbacks; attach tries an existing file input, then the '+' menu's file input (never the OS file chooser), then drop, then paste. | rev 2 (2026-11-24, from owner snapshot s2b34afff, selectors only): the composer was found (rich-textarea div.ql-editor, input-area-v2, [xapfileselectordropzone], button[aria-label*=upload i], button[aria-label='Send message'], new chat via a[aria-label='New chat']) but NO input[type=file] exists until Gemini's own 'Upload files' menu item runs, and the old 'Open upload file menu' / uploader / uploader-file-preview names do not exist in this build. Public reports say the menu button is now 'Upload & tools' and the item sits in images-files-uploader[data-test-id='uploader-images-files-button-advanced'] next to a hidden decoy button.hidden-local-file-image-selector-button. rev 2 therefore clicks that item with the page-world hook (content/ai-hook.js) so the files go straight to Gemini's own file input and no OS dialog opens; drop and paste stay as fallbacks; the attachment chip is confirmed by NEW matching elements (count above the count before the attempt); and if nothing attaches the text files are sent inside the message (inlineFallback). Chip names are still unverified.",
+  "notes": "UNVERIFIED against a live signed-in gemini.google.com (built from public knowledge of its web DOM plus owner snapshot s2b34afff, selectors only, and the owner's v0.1.9 retest). rev 2: Upload & tools menu + page hook (content/ai-hook.js), drop and paste fallbacks, growth-based chip confirmation, inlineFallback. rev 3: steps.blocks.markdownText reads the reply as markdown (code blocks as fences, raw HTML runs fenced, whole documents become blocks). Chip and code-block names are still unverified.",
   "match": {
     "hosts": [
       "gemini.google.com"
@@ -198,7 +198,8 @@
         ".code-block-decoration > span",
         ".code-block-decoration span",
         ".code-block-decoration"
-      ]
+      ],
+      "markdownText": true
     },
     "files": {
       "allowedHosts": [
@@ -302,7 +303,7 @@
   },
   "integrity": {
     "alg": "sha256",
-    "hash": "e627dfa77a3aed5a0c115c361bf650a0c5c4e35d53fb4ad54ac5a33b0b4baec3",
+    "hash": "47ab80d3720725a9f285f09ad72ea29b71d2e3f6e97f8c53e78c5afa8b62c28a",
     "sig": "",
     "keyId": ""
   }

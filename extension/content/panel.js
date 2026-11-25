@@ -24,6 +24,7 @@
     '.reply.live::after{content:" \\258B";color:#93c5fd}',
     '.reply p{margin:0 0 6px}.reply p:last-child{margin:0}',
     '.reply h1,.reply h2,.reply h3{margin:0 0 6px;font-size:13px}',
+    '.reply details.md-code{margin:6px 0;border:1px solid #333844;border-radius:6px;background:#111318}.reply details.md-code>summary{cursor:pointer;padding:5px 8px;font-size:12px;color:#9aa3ad}.reply details.md-code>pre{margin:0;max-height:320px}',
     '.reply pre{margin:6px 0;padding:8px;background:#111318;border-radius:6px;overflow:auto;font-size:12px}',
     '.reply code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}',
     '.reply a{color:#93c5fd}',

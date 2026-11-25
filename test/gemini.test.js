@@ -25,7 +25,7 @@ function fast() {
 const collect = () => { const ev = []; return { ev, emit: (e) => ev.push(e) }; };
 const snap = (n) => load(path.join(root, 'harness/snapshots', `gemini-fixture-${n}.html`));
 
-test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.9, rev 2 with the hooked chooser and the inline fallback', () => {
+test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, unverified, needs ext 0.1.10, rev 3 with the hooked chooser, the inline fallback and markdown reply text', () => {
   const i = geminiInstr();
   const ajv = new Ajv({ allErrors: true, strict: false });
   assert.equal(ajv.validate(schema(), i), true, JSON.stringify(ajv.errors));
@@ -33,7 +33,7 @@ test('gemini.json: valid against the schema (Ajv and built-in agree), sealed, un
   const body = Object.assign({}, i); delete body.integrity;
   assert.equal(crypto.createHash('sha256').update(canonical(body)).digest('hex'), i.integrity.hash, 'run npm run seal');
   assert.equal(i.verified, false, 'live Gemini selectors are not verified yet');
-  assert.equal(i.minExtVersion, '0.1.9'); assert.ok(i.revision >= 2);
+  assert.equal(i.minExtVersion, '0.1.10'); assert.ok(i.revision >= 3); assert.equal(i.steps.blocks.markdownText, true);
   assert.deepEqual(i.steps.attach.strategies.map((s) => s.type), ['fileInput', 'hookedChooser', 'drop', 'paste']);
   assert.ok(i.steps.attach.inlineFallback.maxBytes > 0);
   assert.ok(i.steps.attach.strategies.every((s) => !s.confirmMs || s.confirmMs <= 12000), 'each attempt is bounded');
@@ -229,4 +229,74 @@ test('provider registry: ChatGPT + Gemini, hosts match config, labels and messag
   assert.equal(R.message('gemini', 'something_unknown'), null);
   for (const f of ['content_scripts', 'background']) assert.ok(m[f]);
   assert.ok(m.content_scripts[0].js.includes('lib/providers/gemini.js'));
+});
+
+// ---- v0.1.10: reply as markdown, code blocks collapsed, raw HTML recovered ----
+const runReply = async (query) => {
+  const win = await mockGemini('?speed=3&tokens=8&' + query);
+  const { ev, emit } = collect();
+  const res = await runJob(win, fast(), JOB(), { emit }).promise;
+  assert.equal(res.ok, true, JSON.stringify(ev.filter((e) => e.kind === 'error')));
+  return { ev, done: ev.find((e) => e.kind === 'done'), chunks: ev.filter((e) => e.kind === 'chunk') };
+};
+
+test('v0.1.10: code blocks stay code in the reply text (fences), without header chrome, and the live text is already fenced', async () => {
+  const { done, chunks } = await runReply('code=1');
+  assert.match(done.text, /File: `\/index\.html`\n\n```html\n<!doctype html>\n<html><body><h1>Family owned since 1998<\/h1><\/body><\/html>\n```/);
+  assert.match(done.text, /```css\nh1\{color:#1f4d2b\}\n```/);
+  assert.equal(/content_copy|Copy code/.test(done.text), false, 'copy button / icon text is not in the reply');
+  assert.match(done.text, /That is all\.$/);
+  assert.ok(chunks.some((c) => /```html/.test(c.text)), 'streamed text carries the fence');
+  assert.equal(done.blocks.length, 2); assert.match(done.blocks[0].label, /File: \/index\.html$/);
+});
+
+test('v0.1.10: a whole HTML page written into ordinary paragraphs becomes a fenced block AND a file block', async () => {
+  const { done } = await runReply('reply=rawdoc');
+  assert.equal(done.blocks.length, 1);
+  assert.equal(done.blocks[0].lang, 'html'); assert.match(done.blocks[0].label, /File: \/index\.html$/);
+  assert.match(done.blocks[0].code, /^<!doctype html>\n<html lang="en">[\s\S]*<\/html>\n$/);
+  assert.match(done.text, /File: `\/index\.html`\n\n```html\n<!doctype html>[\s\S]*<\/html>\n```\n\nThat is all\./);
+  assert.equal(/\n<h1 id="top">/.test(done.text.split('```')[0]), false, 'not left as paragraphs');
+});
+
+test('v0.1.10: an HTML fragment in paragraphs is shown as a code block, and is NOT offered as a file block', async () => {
+  const { done } = await runReply('reply=rawfrag');
+  assert.equal(done.blocks.length, 0);
+  assert.match(done.text, /```html\n<p class="fine preview-note">Earlier previews remain available:[\s\S]*<h2 id="install">Install it in Chrome<\/h2>[\s\S]*```/);
+  assert.equal(done.text.split('```').length, 3, 'one fenced block');
+});
+
+test('v0.1.10: ordinary prose with a little markup is untouched; a reply mentioning ``` inside code cannot break the fences', async () => {
+  const I2 = require('../extension/lib/interpreter.js');
+  const win = await mockGemini('?convo=1');
+  const d = win.document, h = d.createElement('div');
+  h.innerHTML = '<p>Use <strong>bold</strong> and <code>a &lt; b</code> here. See <a href="https://example.com/x">the docs</a>.</p><ul><li>one</li><li>two</li></ul><pre><code class="language-md">```js\nx\n```</code></pre><p>&lt;b&gt;not html lines&lt;/b&gt; end</p>';
+  const out = I2.replyMarkdown ? I2.replyMarkdown(win, d, h, geminiInstr(), true) : null;
+  assert.ok(out, 'exported');
+  assert.match(out.text, /^Use \*\*bold\*\* and `a < b` here\. See \[the docs\]\(https:\/\/example\.com\/x\)\./);
+  assert.match(out.text, /- one\n- two/);
+  assert.equal(out.text.split('```').length, 3 + 0, 'inner fence neutralised: exactly one real fence pair');
+  assert.equal(out.blocks[0].code, '```js\nx\n```', 'the block keeps the original code');
+  assert.match(out.text, /<b>not html lines<\/b> end$/);
+});
+
+test('v0.1.10: the whole-page reply (code block or raw paragraphs) matches the sent page and would be staged; a fragment is not; prose is what is outside the fences', async () => {
+  const fs = require('fs'), path = require('path');
+  const sp = path.join(__dirname, '../server/markup/markup.js');
+  const src = fs.readFileSync(fs.existsSync(sp) ? sp : path.join(__dirname, '../mock/markup.js'), 'utf8');   // the git tree keeps a copy of the served editor in mock/
+  const grab = (name) => { const m = new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}').exec(src); assert.ok(m, name); return m[0]; };
+  const grabVar = (name) => { const m = new RegExp('var ' + name + ' = [^\\n]*;').exec(src); assert.ok(m, name); return m[0]; };
+  const M = new Function('location', 'XT', 'brand', [grabVar('XT_LIM'), grabVar('XT_MIME'), grabVar('XT_SAVE_TYPES'), grabVar('XT_LANG'),
+    grab('xtExt'), grab('xtBase'), grab('xtHtmlFrom'), grab('xtKind'), grab('xtMatchBlock'), grab('xtUpdatesFrom'), grab('xtCap'), grab('xtProse'),
+    'return { xtUpdatesFrom, xtProse };'].join('\n'))({ href: 'https://example.com/' }, { app: false }, 'B1');
+  const SENT = [{ path: '/index.html', name: 'index.html', base: 'index.html', kind: 'html', page: true, text: null }];
+  for (const q of ['reply=rawdoc', 'code=1']) {
+    const { done } = await runReply(q);
+    const u = M.xtUpdatesFrom(done, SENT);
+    assert.deepEqual(u.map((x) => x.file.path), ['/index.html'], q);
+    assert.match(u[0].content, /<html/);
+    assert.equal(/```/.test(M.xtProse(done)), false, 'prose has no fences: ' + q);
+  }
+  const frag = (await runReply('reply=rawfrag')).done;
+  assert.deepEqual(M.xtUpdatesFrom(frag, SENT), []);
 });

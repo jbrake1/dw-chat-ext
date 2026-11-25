@@ -56,7 +56,7 @@
         },
         "blocks": {
           "type": "object", "additionalProperties": false, "description": "v0.1.6: code-block reading hints (header text to skip, language chip).",
-          "properties": { "ignoreSelectors": { "$ref": "#/definitions/selectors" }, "langSelectors": { "$ref": "#/definitions/selectors" } }
+          "properties": { "ignoreSelectors": { "$ref": "#/definitions/selectors" }, "langSelectors": { "$ref": "#/definitions/selectors" }, "markdownText": { "type": "boolean", "description": "v0.1.10: read the reply as markdown (code blocks as fences, raw HTML runs fenced and whole documents turned into blocks)." } }
         },
         "prompt": {
           "type": "object", "required": ["selectors"], "additionalProperties": false,

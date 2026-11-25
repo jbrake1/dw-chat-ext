@@ -650,4 +650,52 @@ scenarios.live = async (env) => {
   return c.steps;
 };
 
+
+// v0.1.10: a Gemini reply that is HTML written into ordinary paragraphs is shown as ONE collapsed code block (no raw
+// source paragraphs); a real code-block reply is collapsed too.
+for (const mode of ['rawdoc', 'rawfrag']) {
+  scenarios['gemini-reply-' + mode] = async (env) => {
+    const c = new L.Checks();
+    await env.login();
+    await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=' + mode);
+    await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+    const dw = await env.openDw();
+    await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+    const out = await sendAndWait(env, c, { timeout: 60000 });
+    c.check('done_detected', out.done === 'complete', out);
+    const r = await dw.evaluate(() => {
+      const root = document.getElementById('dw-ext-root').shadowRoot, rep = root.querySelector('[data-role=reply]');
+      const d = rep.querySelector('details.md-code');
+      const paras = Array.from(rep.querySelectorAll('p')).map((p) => p.textContent);
+      return { details: rep.querySelectorAll('details.md-code').length, open: d && d.open, summary: d && d.querySelector('summary').textContent, codeHasHtml: d && /<h2 id="install">/.test(d.querySelector('pre').textContent), rawParas: paras.filter((t) => /^<(?:p|div|h\d|!doctype|html|body)/i.test(t)).length, tail: paras[paras.length - 1] };
+    });
+    c.check('one_collapsed_code_block_with_the_html', r.details === 1 && r.open === false && r.codeHasHtml && /^HTML · \d+ lines/.test(r.summary), r);
+    c.check('no_raw_html_paragraphs_and_prose_kept', r.rawParas === 0 && r.tail === 'That is all.', r);
+    return c.steps;
+  };
+}
+
+// v0.1.10: the production home page had a stray unterminated script that swallowed the editor loader, so the editor never
+// mounted and only the extension panel showed. mock/home-prod.html is that page as production served it.
+scenarios['home-editor-fallback'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  const p = await env.ctx.newPage();
+  const errs = []; p.on('pageerror', (e) => errs.push(String(e).slice(0, 80)));
+  await p.goto(env.dwUrl + '/home-prod.html');
+  await p.waitForFunction(() => !!document.getElementById('dw-markup-root'), null, { timeout: 15000 }).catch(() => {});
+  const r = await p.evaluate(() => {
+    const mk = document.getElementById('dw-markup-root'), fab = mk && mk.shadowRoot && mk.shadowRoot.querySelector('.fab');
+    if (fab) fab.click();
+    return { mk: !!mk, fab: !!fab, fallbackTag: !!document.querySelector('script[data-dw-ext-fallback]') };
+  });
+  c.check('page_still_has_its_own_loader_error', errs.some((e) => /SyntaxError/.test(e)), errs);
+  c.check('editor_mounted_by_extension_fallback', r.mk && r.fab && r.fallbackTag, r);
+  await L.sleep(1500);
+  const o = await p.evaluate(() => { const sr = document.getElementById('dw-markup-root').shadowRoot, ta = sr.querySelector('textarea'); const b = ta && ta.getBoundingClientRect(); return { ta: !!ta, w: b && Math.round(b.width), h: b && Math.round(b.height) }; });
+  c.check('note_textarea_visible_after_opening', o.ta && o.w > 100 && o.h > 30, o);
+  await p.close();
+  return c.steps;
+};
+
 module.exports.scenarios = scenarios;

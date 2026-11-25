@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.10 — 2026-11-24
+
+- **Gemini replies keep their code.** v0.1.9 flattened a Gemini reply to plain text, so an HTML page showed in the chat window as raw source in paragraphs and nothing was staged. The reply is now read as markdown (`steps.blocks.markdownText` in `instructions/gemini.json` rev 3, needs extension 0.1.10): a code block becomes a fenced block (copy buttons and language chips left out), and if the model wrote HTML into ordinary paragraphs instead of a code block, that run is fenced too. A whole page (`<!DOCTYPE>`/`<html>…</html>`) also becomes a file block, so it is staged as a preview with Publish and Discard like a ChatGPT reply. A fragment is shown as code and never published; the editor says so and asks for the whole file.
+- **Code is collapsed in the chat window.** A code block of three or more lines shows as one line ("HTML · 120 lines · click to show"); it stays open if you opened it while the reply keeps streaming.
+- **Editor missing on some pages (home page).** Ten stored pages had a stray unterminated script before `</body>` that swallowed the editor loader, so the editor never mounted and only the extension panel showed. The pages are repaired on the site, and the extension now loads the editor itself (once, after 3 s) when a page names `/_dw/edit.js`, no editor mounted and nothing loaded it.
+
 ## v0.1.9 — 2026-11-24
 
 - **Gemini upload fixed.** A live snapshot (id s2b34afff) showed there is no `input[type=file]` on the Gemini page until Gemini's own "Upload files" menu item runs, and the old "Open upload file menu" / `uploader` / `uploader-file-preview` names are gone (the menu button is now "Upload & tools"). v0.1.8 tried drop and paste, waited 30 s on each and failed with `attach_not_confirmed` after about 95 s. v0.1.9 opens "Upload & tools", arms a small page-world hook (`content/ai-hook.js`), and clicks Gemini's own "Upload files" item. When Gemini calls `input.click()` to open the OS file chooser, the hook gives the files to that input instead, so no dialog opens. The hook only acts while armed, once, for a few seconds, and talks to nothing. It is injected by the manifest on gemini.google.com and by the service worker into tabs that were already open.

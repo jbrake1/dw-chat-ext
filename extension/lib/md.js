@@ -32,6 +32,8 @@
   }
 
   function renderMd(doc, text, into) {
+    var wasOpen = [], codeN = 0;                                                // a code block the reader opened stays open while the reply streams
+    Array.prototype.forEach.call(into.querySelectorAll ? into.querySelectorAll('details.md-code') : [], function (d, n) { if (d.open) wasOpen.push(n); });
     into.textContent = '';
     var src = String(text || '').replace(/\r\n/g, '\n');
     var chunks = src.split(/```/);
@@ -45,7 +47,15 @@
         var pre = el(doc, 'pre', { class: 'md-pre' });
         var code = el(doc, 'code', lang ? { 'data-lang': lang } : null, body);
         pre.appendChild(code);
-        into.appendChild(pre);
+        var nLines = body ? body.split('\n').length : 0;
+        if (nLines > 2) {                                                        // v0.1.10: code of 3+ lines is collapsed
+          var det = el(doc, 'details', { class: 'md-code' });
+          det.appendChild(el(doc, 'summary', null, (lang ? lang.toUpperCase() + ' \u00b7 ' : 'Code \u00b7 ') + nLines + ' lines \u00b7 click to show'));
+          det.appendChild(pre);
+          if (wasOpen.indexOf(codeN) >= 0) det.open = true;
+          into.appendChild(det);
+        } else into.appendChild(pre);
+        codeN++;
         continue;
       }
       var lines = chunks[i].split('\n'), para = [];

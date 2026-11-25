@@ -96,6 +96,7 @@
       scheduleRenew(p);
       toPage('dw-ext-ready', { paired: !!S.state.paired });
       emitStatus();
+      editorFallback();
       // Give a page that implements the hook time to answer with dw-ext-hello; only then fall back to the fetch tap.
       if (!S.tapTimer) S.tapTimer = setTimeout(function () {
         if (S.active && !S.nativeHook && !S.tapRequested) { S.tapRequested = true; send({ type: 'dw:injectTap' }); }
@@ -103,6 +104,22 @@
     } finally { S.activating = false; S.activateP = null; }
     })();
     return S.activateP;
+  }
+  // v0.1.10: a page whose own inline loader is broken (a stray unterminated script in its source swallowed the loader, so
+  // the editor never mounted and only this panel showed) gets the editor loaded from here, once per page, after 3 s.
+  // Only when the page itself names /_dw/edit.js, no editor has mounted, and nothing has loaded it yet.
+  function editorFallback() {
+    if (S.fbTimer) return;
+    S.fbTimer = setTimeout(function () {
+      try {
+        if (!S.active || document.getElementById('dw-markup-root') || document.querySelector('script[src*="/_dw/edit.js"],script[src*="/markup/markup.js"]')) return;
+        var named = Array.prototype.some.call(document.scripts, function (s) { return !s.src && s.textContent.indexOf('/_dw/edit.js') >= 0; });
+        if (!named) return;
+        var el = document.createElement('script'); el.src = '/_dw/edit.js'; el.async = true; el.setAttribute('data-dw-ext-fallback', '1');
+        (document.head || document.documentElement).appendChild(el);
+        dwLog('editorFallback', {});
+      } catch (e) {}
+    }, 3000);
   }
   function scheduleRenew(p) {
     if (S.renewTimer) clearTimeout(S.renewTimer);

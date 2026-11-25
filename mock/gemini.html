@@ -128,7 +128,17 @@
         if (k >= words.length) { clearInterval(timer); timer = null; if (CODE) code(md); finish(); }
       }, SPEED);
     }, 250);
+    function rawHtml(md2, whole) {                                                // ?reply=rawdoc|rawfrag: the model wrote HTML into ordinary paragraphs (no code block)
+      var lp = document.createElement('p'); lp.innerHTML = 'File: <code></code>'; lp.querySelector('code').textContent = '/index.html'; md2.appendChild(lp);
+      var src = whole
+        ? ['<!doctype html>', '<html lang="en"><head><meta charset="utf-8"><title>New title for the page</title></head>', '<body>', '<h1 id="top">Family owned since 1998</h1>', '<p class="fine">Earlier previews remain available: <a href="a.zip">a.zip</a> (md5 <code>0123456789abcdef0123456789abcdef</code>)</p>', '<div class="wrap"><h2 id="install">Install it in Chrome</h2></div>', '</body>', '</html>']
+        : ['<p class="fine preview-note">Earlier previews remain available: <a href="a.zip">a.zip</a> (md5 <code>0123456789abcdef0123456789abcdef</code>), <a href="b.zip">b.zip</a></p>', '<p class="fine preview-note">Prefer a walkthrough? Email <a href="mailto:support@example.com">support@example.com</a>.</p>', '<div class="wrap">', '<h2 id="install">Install it in Chrome</h2>', '<div class="install-block"><ol><li>Open chrome://extensions</li><li>Turn on Developer mode</li></ol></div>', '</div>'];
+      src.forEach(function (line) { var p = document.createElement('p'); p.textContent = line; md2.appendChild(p); });
+      var tail = document.createElement('p'); tail.textContent = 'That is all.'; md2.appendChild(tail);
+    }
     function code(md2) {
+      var RAW = q.get('reply');
+      if (RAW === 'rawdoc' || RAW === 'rawfrag') return rawHtml(md2, RAW === 'rawdoc');
       var add = function (label, lang, body) {
         var lp = document.createElement('p'); lp.innerHTML = 'File: <code></code>'; lp.querySelector('code').textContent = label; md2.appendChild(lp);
         var cb = document.createElement('code-block');
