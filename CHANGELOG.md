@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.6 — 2026-11-24
+
+- **Gemini** as a second AI. A picker (ChatGPT / Gemini) in the editor note box and in the extension popup; the choice is remembered. A gemini.google.com tab can be paired from the popup like a ChatGPT tab.
+- On Send, the job goes to the paired tab of the chosen AI, else to an open tab of it (same window first), else a new background tab at the AI's new-chat page, which then becomes the paired tab. After an explicit Unpair nothing is opened until you pair or pick an AI again.
+- Gemini always starts from a **New chat**; files go in through the "+" upload menu's file input (fallbacks: drop, paste), never the OS file chooser. A guard in the instructions stops the relay from clicking anything that looks like the model picker, Upgrade, Get app, share, delete, rename or settings.
+- Gemini code blocks are read with their `File: /path` labels (the language chip and copy icon are left out), so returned files are staged as previews with Publish / Discard as for ChatGPT.
+- Gemini's sign-in wall and usage / upload limit notices are reported plainly ("Gemini is not signed in…", "Gemini's file limit was reached…").
+- Provider adapters in `lib/providers/` (data only; selectors stay in `instructions/<id>.json`), new bundled `instructions/gemini.json` (revision 1, **unverified** against the live site), schema additions (`newChat` flow step, `menuFileInput` attach strategy, `blocks` hints, `guard.neverClick`, `loggedOut.strict`). `dw-ext-submit` accepts `provider: 'chatgpt' | 'gemini'`; `dw-ext-provider` sets the choice; the extension status reports `provider`.
+
 ## v0.1.5 — 2026-11-24
 
 - **Attach files** in Suggest an edit: add your own files (images, HTML, CSS, JS, JSON, SVG, PDF, text) with the picker or by dragging them onto the page, each with an optional "put it at" path such as `/images/new-logo.png`. Same limits as page files, counted together (10 files, 2 MB each, 6 MB in all). A file with no path is only shown to the AI.

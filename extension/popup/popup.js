@@ -15,7 +15,7 @@
     $('ver').textContent = 'v' + s.extVersion;
     var t = s.tab;
     $('dot-this').className = 'dot' + (t && t.active ? ' on' : '');
-    $('this-status').textContent = !t ? 'No page' : t.active ? 'Active on ' + t.host + ' (you are a signed-in editor)' : t.dw ? 'Off on ' + t.host + ' (sign in as an editor, then open #suggest-edit)' : 'Off on this page';
+    $('this-status').textContent = !t ? 'No page' : t.active ? 'Active on ' + t.host + ' (you are a signed-in editor)' : t.dw ? 'Off on ' + t.host + ' (sign in as an editor, then open #suggest-edit)' : (t.canPair ? (s.pair && s.pair.tabId === t.id ? 'This AI tab is paired' : 'AI chat tab: click Pair this tab to use it') : 'Off on this page');
     $('dot-pair').className = 'dot' + (s.pair ? ' on' : '');
     $('pair-status').textContent = s.pair ? 'Paired with: ' + s.pair.title + (s.paused ? ' (paused)' : '') : 'No chat tab paired';
     $('pair').disabled = !(t && t.canPair) || (s.pair && t && s.pair.tabId === t.id);

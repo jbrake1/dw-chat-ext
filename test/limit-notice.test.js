@@ -76,7 +76,7 @@ test('runner: a notice left on the page from before this send is not blamed on a
 });
 test('wiring: the limit event reaches the page as a plain-text error; nothing on ChatGPT is clicked for it', () => {
   const dw = fs.readFileSync(path.join(__dirname, '../extension/content/dw.js'), 'utf8');
-  assert.match(dw, /ChatGPT\\u2019s file limit was reached\. Try again ' \+ when\.phrase \+ ', or send without page files\./);
+  assert.match(dw, /DWX\.providers\.label\(pidE\) \+ '\\u2019s file limit was reached\. Try again ' \+ when\.phrase \+ ', or send without page files\./);   // v0.1.6: ChatGPT or Gemini
   assert.match(dw, /toPage\('dw-ext-error', when \? \{ jobId: msg\.jobId, code: e\.code, step: e\.step, retryAfter: when\.time, retryDay: when\.day/);
   assert.doesNotMatch(dw + fs.readFileSync(path.join(__dirname, '../extension/lib/runner.js'), 'utf8'), /Try Plus|Start a free Plus|upgrade/i);
 });
