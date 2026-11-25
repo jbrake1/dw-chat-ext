@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock Grok</title>
+<style>body{font-family:system-ui;margin:0;display:flex}nav{width:160px;border-right:1px solid #ccc;padding:8px}main{flex:1;padding:16px}.hidden{display:none}textarea{width:100%}</style></head>
+<body>
+<!-- Mock of grok.com. The composer markup copies grok.com's public server-rendered HTML (2026-11-25): textarea aria-label "Ask Grok anything",
+     hidden input[type=file][multiple], attach button data-testid=attach-button, submit button data-testid=chat-submit, Home page link.
+     Reply bubbles (div#response-N.items-start .message-bubble .response-content-markdown), code blocks, stop button and file cards are a best-effort guess. -->
+<nav>
+  <a aria-label="Home page" href="/">Grok</a>
+  <div><a href="/imagine" data-forbidden="imagine">Imagine</a></div>
+  <button aria-label="Upgrade to SuperGrok" data-forbidden="upgrade">Upgrade to SuperGrok</button>
+</nav>
+<main>
+  <div id="last-reply-container"><div id="hist" class="flex flex-col"></div></div>
+  <div data-testid="drop-container"><div data-testid="drop-ui">
+    <input class="hidden" type="file" multiple="">
+    <form data-composer="">
+      <div id="previews"></div>
+      <div data-composer-field=""><textarea dir="auto" placeholder="Ask, create images, or build anything…" aria-label="Ask Grok anything" rows="1"></textarea></div>
+      <button type="button" aria-label="Add files, skills, and connectors" data-testid="attach-button" aria-haspopup="menu">+</button>
+      <button type="button" aria-label="Model select" data-forbidden="model"><span>Grok 4.1</span></button>
+      <button type="button" aria-label="Private" data-forbidden="private">Private</button>
+      <button type="submit" aria-label="Send" data-composer-action="send" data-testid="chat-submit">↑</button>
+    </form>
+  </div></div>
+</main>
+<script>
+window.MOCK = {
+  name: 'Grok', homePath: '/', convoPath: function (id) { return '/c/' + id; }, signInHref: 'https://accounts.x.ai/sign-in',
+  prompt: 'textarea[aria-label="Ask Grok anything"]', send: 'button[data-testid=chat-submit]', stop: null, sendLabel: 'Send', stopLabel: 'Stop model response',
+  fileInput: 'input[type=file]', previews: '#previews', hist: '#hist', newChat: 'a[aria-label="Home page"]',
+  preview: function () { return '<div data-testid="attachment-chip"><span class="name"></span><button type="button" aria-label="Remove attachment">x</button></div>'; },
+  user: function (t) { var d = document.createElement('div'); d.id = 'response-u' + Date.now(); d.className = 'items-end'; d.innerHTML = '<div class="message-bubble bg-surface-l1"><p class="whitespace-pre-wrap"></p></div>'; d.querySelector('p').textContent = t; return d; },
+  assistant: function (n) {
+    var d = document.createElement('div'); d.id = 'response-a' + (n || 0); d.className = 'items-start';
+    d.innerHTML = '<div class="message-bubble"><div class="thinking-container"><button>Thought for 2s</button></div><div class="response-content-markdown markdown"></div></div>';
+    return { el: d, md: d.querySelector('.response-content-markdown'), done: function () { var a = document.createElement('div'); a.className = 'action-buttons'; a.innerHTML = '<button aria-label="Copy">c</button><button aria-label="Share conversation" data-forbidden="share">s</button>'; d.appendChild(a); } };
+  },
+  codeBlock: function (lang, body) {
+    var c = document.createElement('div'); c.setAttribute('data-testid', 'code-block');
+    c.innerHTML = '<div class="hdr"><span></span><button aria-label="Copy">Copy</button></div><pre><code></code></pre>';
+    c.querySelector('.hdr span').textContent = lang; c.querySelector('code').textContent = body; return c;
+  },
+  chips: function () {
+    var b = document.createElement('div'); b.className = 'generated-files';
+    b.innerHTML = '<div data-testid="file-card"><span class="file-name">hanalei-taro-1600.webp</span><button type="button" data-dl="1" aria-label="Download">d</button></div>' +
+      '<div data-testid="file-card"><span class="file-name">hanalei-taro-1600.jpg</span><a href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==">Open</a></div>';
+    return b;
+  }
+};
+</script>
+<script src="/aimock.js"></script>
+</body></html>

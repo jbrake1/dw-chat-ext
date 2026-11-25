@@ -1,0 +1,336 @@
+{
+  "schemaVersion": 1,
+  "site": "grok",
+  "revision": 1,
+  "version": "2026.11.25-1",
+  "minExtVersion": "0.1.13",
+  "verified": false,
+  "notes": "rev 1 (v0.1.13). PARTLY VERIFIED: the composer (textarea aria-label 'Ask Grok anything', hidden input[type=file][multiple], attach button data-testid=attach-button, send button data-testid=chat-submit, Home page link) is from grok.com's public server-rendered HTML fetched 2026-11-25; a signed-in session may render a tiptap/ProseMirror editor instead, which the prompt list also covers. Reply bubbles, stop button, code blocks, attachment previews and generated-file chips are from public knowledge of Grok's web DOM and are UNVERIFIED. Every selector can be overridden by publishing a new revision of this file.",
+  "match": {
+    "hosts": [
+      "grok.com"
+    ]
+  },
+  "guard": {
+    "neverClick": [
+      "upgrade|supergrok|subscribe|premium|heavy",
+      "model (select|picker)|mode (select|picker)",
+      "^\\s*(grok ?\\d(\\.\\d)?|auto|fast|expert|think(ing)?|deepsearch|deeper ?search)\\s*$",
+      "\\b(private|incognito|ghost)\\b",
+      "voice|imagine|companion",
+      "\\b(delete|rename|share|archive|pin|export|report|feedback)\\b",
+      "settings|sign out|log out|logout"
+    ]
+  },
+  "flow": [
+    "newChat",
+    "text",
+    "attach",
+    "send"
+  ],
+  "steps": {
+    "loggedOut": {
+      "strict": false,
+      "selectors": [
+        "a[href*='accounts.x.ai/sign-in']",
+        "a[href^='/sign-in']",
+        {
+          "css": "a, button",
+          "textMatches": "^\\s*(sign in|log in)\\s*$"
+        }
+      ]
+    },
+    "newChat": {
+      "homePath": "^/(chat/?)?$",
+      "timeoutMs": 10000,
+      "selectors": [
+        "a[aria-label='New chat' i]",
+        "button[aria-label='New chat' i]",
+        "a[data-sidebar='menu-button'][href='/']",
+        "a[aria-label='Home page'][href='/']",
+        "a[href='/'][aria-label]",
+        {
+          "css": "a, button",
+          "textMatches": "^\\s*new chat\\s*$"
+        }
+      ]
+    },
+    "prompt": {
+      "selectors": [
+        "form[data-composer] div.tiptap.ProseMirror[contenteditable='true']",
+        "div.tiptap.ProseMirror[contenteditable='true']",
+        "form[data-composer] div.ProseMirror[contenteditable='true']",
+        "textarea[aria-label='Ask Grok anything']",
+        "form[data-composer] textarea",
+        "[data-composer-field] textarea",
+        "form textarea",
+        "div[contenteditable='true'][role='textbox']"
+      ],
+      "timeoutMs": 30000,
+      "setText": [
+        "execCommand",
+        "paste",
+        "textContent"
+      ],
+      "clearFirst": true
+    },
+    "attach": {
+      "strategies": [
+        {
+          "type": "fileInput",
+          "selectors": [
+            "input.hidden[type='file'][multiple]",
+            "input[type='file'][multiple]",
+            "input[type='file']"
+          ],
+          "waitMs": 300,
+          "confirmMs": 8000
+        },
+        {
+          "type": "hookedChooser",
+          "openSelectors": [
+            "button[data-testid='attach-button']",
+            "button[aria-label^='Add files' i]",
+            "button[aria-label*='attach' i]",
+            "button[aria-label*='upload' i]"
+          ],
+          "itemSelectors": [
+            "[role='menuitem'][data-testid*='upload' i]",
+            "[role='menuitem'][aria-label*='upload' i]",
+            {
+              "css": "[role='menuitem'], button",
+              "textMatches": "^\\s*(upload (a )?files?|upload from (computer|device)|files?|attach files?)\\s*$"
+            }
+          ],
+          "waitMs": 4000,
+          "confirmMs": 12000
+        },
+        {
+          "type": "drop",
+          "selectors": [
+            "[data-testid='drop-ui']",
+            "[data-testid='drop-container']",
+            "form[data-composer]"
+          ],
+          "confirmMs": 8000
+        },
+        {
+          "type": "paste",
+          "confirmMs": 6000
+        }
+      ],
+      "confirm": {
+        "selectors": [
+          "form[data-composer] [data-testid*='attachment' i]",
+          "form[data-composer] [data-testid*='file' i]:not(input)",
+          "[data-testid*='attachment-chip' i]",
+          "[data-testid*='file-preview' i]",
+          "form[data-composer] img[src^='blob:']",
+          "form[data-composer] button[aria-label^='Remove' i]",
+          "form button[aria-label*='remove' i]",
+          "[class*='attachment' i] img",
+          "[class*='file-chip' i]"
+        ],
+        "timeoutMs": 15000
+      },
+      "inlineFallback": {
+        "maxBytes": 120000,
+        "maxFileBytes": 60000
+      }
+    },
+    "send": {
+      "selectors": [
+        "button[data-testid='chat-submit']",
+        "button[type='submit'][data-composer-action='send']",
+        "form[data-composer] button[type='submit'][aria-label='Send']",
+        "button[type='submit'][aria-label='Submit']",
+        "form button[type='submit']"
+      ],
+      "timeoutMs": 90000,
+      "requireEnabled": true,
+      "fallbackKey": "Enter"
+    },
+    "stop": {
+      "selectors": [
+        "button[aria-label='Stop model response']",
+        "button[data-composer-action='stop']",
+        "button[data-testid*='stop' i]",
+        "button[aria-label^='Stop' i]"
+      ]
+    },
+    "assistantMessage": {
+      "selectors": [
+        "div[id^='response-'].items-start",
+        "[data-testid='assistant-message']",
+        "div.items-start > div.message-bubble",
+        "div.message-bubble:not(.bg-surface-l1)"
+      ],
+      "textSelectors": [
+        ".response-content-markdown",
+        ".message-bubble .markdown",
+        ".message-bubble",
+        ".prose"
+      ],
+      "pick": "last"
+    },
+    "blocks": {
+      "ignoreSelectors": [
+        "button",
+        "svg",
+        "[data-testid='code-block'] > div:first-child button",
+        "[class*='thinking' i]",
+        "[data-testid*='thinking' i]",
+        "[class*='citation' i]",
+        "[data-testid*='sources' i]"
+      ],
+      "langSelectors": [
+        "[data-testid='code-block'] > div:first-child span",
+        "[data-testid='code-block'] [class*='lang' i]",
+        "pre ~ div span"
+      ],
+      "markdownText": true
+    },
+    "files": {
+      "allowedHosts": [
+        "assets.grok.com",
+        "grok.com"
+      ],
+      "links": [
+        {
+          "selectors": [
+            "a[download]"
+          ],
+          "kind": "file"
+        },
+        {
+          "selectors": [
+            ".response-content-markdown a[href^='http']",
+            ".message-bubble a[href^='http']"
+          ],
+          "kind": "link"
+        }
+      ],
+      "images": [
+        {
+          "selectors": [
+            "img[src*='assets.grok.com']",
+            "[data-testid*='generated-image' i] img"
+          ]
+        }
+      ],
+      "generated": {
+        "useHook": true,
+        "selectors": [
+          "[data-testid*='file-card' i]",
+          "[data-testid*='artifact' i]",
+          "[data-testid*='generated-file' i]",
+          "[data-testid*='attachment' i]",
+          "[class*='file-card' i]",
+          "[class*='artifact' i]",
+          "[class*='download-chip' i]",
+          "a[download]",
+          "a[href^='blob:']",
+          "a[href*='assets.grok.com']"
+        ],
+        "textNames": true,
+        "climb": 4,
+        "downloadSelectors": [
+          "a[download]",
+          "button[aria-label*='download' i]",
+          "a[aria-label*='download' i]",
+          "[role='button'][aria-label*='download' i]",
+          "[data-testid*='download' i]",
+          {
+            "css": "button, [role='button'], a",
+            "textMatches": "^\\s*(download|save)( file| image)?\\s*$"
+          }
+        ],
+        "allowedHosts": [
+          "assets.grok.com",
+          "grok.com"
+        ],
+        "tagText": "\\[file-tag:\\s*[^\\]]{1,120}\\]",
+        "timeoutMs": 25000,
+        "fetchMs": 12000,
+        "captureMs": 8000
+      }
+    },
+    "errors": [
+      {
+        "selectors": [
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "(reached|hit) (your|the) (usage |message |daily |free |rate |upload )?limit"
+          },
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "out of (free )?(messages|queries|uploads)|limit resets|upgrade to (continue|keep)"
+          },
+          {
+            "css": "div[id^='response-'].items-start .response-content-markdown",
+            "textMatches": "^\\s*you.{0,3}(ve|have) (reached|hit) (your|the) (usage |message |daily |free )?limit"
+          }
+        ],
+        "code": "usage_limit"
+      },
+      {
+        "selectors": [
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "sign in to (upload|continue|use|keep)|log in to (upload|continue)|signed out|session expired"
+          }
+        ],
+        "code": "not_logged_in"
+      },
+      {
+        "selectors": [
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "too many requests|rate limit|try again (later|in a (few|moment))"
+          }
+        ],
+        "code": "rate_limited"
+      },
+      {
+        "selectors": [
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "something went wrong|network error|couldn.t (upload|send)|failed to upload|upload failed"
+          },
+          {
+            "css": "[role='alert'], [role='status'], [role='dialog'], [data-sonner-toast], li[data-sonner-toast]",
+            "textMatches": "file (type )?(is )?not supported|too large|exceeds? the (size|length)"
+          }
+        ],
+        "code": "chat_error"
+      }
+    ]
+  },
+  "stream": {
+    "startTimeoutMs": 120000,
+    "maxDurationMs": 900000,
+    "noReplyGraceMs": 10000,
+    "emitMinIntervalMs": 150,
+    "done": {
+      "all": [
+        {
+          "type": "newMessage"
+        },
+        {
+          "type": "absent",
+          "step": "stop"
+        },
+        {
+          "type": "textStable",
+          "ms": 2000
+        }
+      ]
+    }
+  },
+  "integrity": {
+    "alg": "sha256",
+    "hash": "0d7ba5f5a61f2fd4f49a935fc6b244776b65d2a28d2ec1264602ce74f4d62c58",
+    "sig": "",
+    "keyId": ""
+  }
+}

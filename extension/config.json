@@ -5,7 +5,9 @@
   "refreshMinutes": 1440,
   "aiSites": {
     "chatgpt.com": "chatgpt",
-    "gemini.google.com": "gemini"
+    "gemini.google.com": "gemini",
+    "grok.com": "grok",
+    "claude.ai": "claude"
   },
   "dwHosts": [
     "app.dwalliance.com",

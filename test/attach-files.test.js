@@ -11,7 +11,7 @@ const grab = (name) => { const m = new RegExp('function ' + name + '\\([^)]*\\) 
 const grabVar = (name) => { const m = new RegExp('var ' + name + ' = [^\\n]*;').exec(src); assert.ok(m, name); return m[0]; };
 const M = new Function('location', 'XT', 'brand', 'ui', 'el', [grabVar('XT_LIM'), grabVar('XT_MIME'), grabVar('XT_SAVE_TYPES'), grabVar('XT_LANG'), grabVar('XT_BLOCKED'), grabVar('XT_IMG_MIME'), 'var XT_ATT = [], XT_ATT_SEQ = 0;',
   grab('xtExt'), grab('xtBase'), grab('xtHtmlFrom'), grab('xtKind'), grab('xtDecodeText'), grab('xtMatchBlock'), grab('xtUpdatesFrom'), grab('xtCap'), grab('xtNamed'), grab('xtProse'), grab('xtAsIs'),
-  grab('xtPagePath'), grab('xtLooseKey'), grab('xtLooseSave'), grab('xtRemember'), grab('xtAttName'), grab('xtAttPath'), grab('xtAttAddOne'), grab('xtAttCheck'), grab('xtAttRender'),
+  grab('xtPagePath'), 'var XT_DRAFT_ATT_MAX = 1500000, XS_STORE = {}; function xsDel(k) { delete XS_STORE[k]; } function xsSetJson(k, v) { XS_STORE[k] = JSON.stringify(v); } function xsDraftSoon() {} function xtToDataUrl() { return Promise.reject(new Error("test")); }', grab('xtLooseSave'), grab('xtRemember'), grab('xtAttName'), grab('xtAttPath'), grab('xtAttAddOne'), grab('xtAttCheck'), grab('xtAttRender'),
   'function xtKB(n) { return n + " B"; }',
   'return { xtAttName, xtAttPath, xtAttAddOne, xtAttCheck, xtNamed, xtProse, xtAsIs, xtUpdatesFrom, xtRemember, att: () => XT_ATT, set: (v) => { XT_ATT = v; } };'].join('\n'))
   ({ href: 'https://example.com/site/', pathname: '/site/' }, { sent: null }, 'B1', {}, () => ({}));
@@ -136,7 +136,7 @@ const mkSent = (extra) => {
 const XTO = (() => { const m = /return \{ xtAttName/.exec(''); return null; })();
 test('xtRemember keeps the user files (with their bytes) and never a file with no path', () => {
   const XT = { sent: null };
-  const F = new Function('location', 'XT', 'brand', [grabVar('XT_LIM'), grabVar('XT_MIME'), grabVar('XT_SAVE_TYPES'), grabVar('XT_IMG_MIME'), grab('xtExt'), grab('xtBase'), grab('xtKind'), grab('xtDecodeText'), grab('xtPagePath'), grab('xtLooseKey'), grab('xtLooseSave'), grab('xtRemember'), 'return xtRemember;'].join('\n'))({ href: 'https://example.com/site/', pathname: '/site/' }, XT, 'B1');
+  const F = new Function('location', 'XT', 'brand', [grabVar('XT_LIM'), grabVar('XT_MIME'), grabVar('XT_SAVE_TYPES'), grabVar('XT_IMG_MIME'), grab('xtExt'), grab('xtBase'), grab('xtKind'), grab('xtDecodeText'), grab('xtPagePath'), 'var XT_DRAFT_ATT_MAX = 1500000, XS_STORE = {}; function xsDel(k) { delete XS_STORE[k]; } function xsSetJson(k, v) { XS_STORE[k] = JSON.stringify(v); } function xsDraftSoon() {} function xtToDataUrl() { return Promise.reject(new Error("test")); }', grab('xtLooseSave'), grab('xtRemember'), 'return xtRemember;'].join('\n'))({ href: 'https://example.com/site/', pathname: '/site/' }, XT, 'B1');
   F([att('new-logo.png', '/images/new-logo.png', '\x89PNG\r\n\x1a\n0000', 'image/png'), att('ref.pdf', '', '%PDF-1.4', 'application/pdf'), att('new.css', '/css/new.css', CSS_OLD, 'text/css'), pg('site.css', '/css/site.css', 'h2{}', 'text/css')]);
   assert.deepEqual(XT.sent.map((s) => [s.path, s.kind, !!s.attach]), [['/site/index.html', 'html', false], ['/images/new-logo.png', 'img', true], ['/css/new.css', 'css', true], ['/css/site.css', 'css', false]]);
   assert.equal(XT.sent[2].text, CSS_OLD); assert.match(XT.sent[1].dataUrl, /^data:image\/png;base64,/);
@@ -206,6 +206,12 @@ test('markup.js: attachments ride dw-ext-submit; staging still only via a=files 
   assert.match(src, /var attErr = xtAttCheck\(\);/);
   assert.match(src, /action: 'create', staging: true, file_name: t\.file_name, file_path: t\.file_path/);
   assert.doesNotMatch(src, /action: 'create', file_name|action: 'create', staging: false|staging: false/);
-  assert.equal((src.match(/xtCall\(\{/g) || []).length, 2); assert.equal((src.match(/return xtCall\(body\)/g) || []).length, 1);   // create (staged, body above), publish_staging, discard_staging only
+  // create (staged, body above), publish_staging (xtPublishBody), discard_staging and (v0.1.13) extend_staging only
+  const acts = (src.match(/xtCall\(\{ action: '([a-z_]+)'/g) || []).map((m) => /'([a-z_]+)'/.exec(m)[1]);
+  assert.equal((src.match(/xtCall\(\{/g) || []).length, acts.length);
+  assert.ok(acts.length >= 2 && acts.every((a) => a === 'discard_staging' || a === 'extend_staging'), acts.join());
+  assert.equal((src.match(/return xtCall\(body\)/g) || []).length, 1);
+  assert.equal((src.match(/xtCall\(/g) || []).length, acts.length + 3);   // + the definition, body, xtPublishBody
+  assert.match(src, /var body = \{ action: 'publish_staging', id: it\.id \};/);
   assert.doesNotMatch(src, /fetch\(q\('\?a=files'\)[^;]*\);\s*\n[^\n]*attach/);
 });

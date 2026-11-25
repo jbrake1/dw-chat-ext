@@ -62,10 +62,10 @@ test('messages from another source or without the marker are ignored', async () 
   assert.equal(win.__realClicks, 1);
 });
 
-test('manifest injects it into gemini.google.com only, in the page world, at document_start; the SW can inject it into open tabs', () => {
+test('manifest injects it into gemini.google.com, grok.com and claude.ai only (not chatgpt.com), in the page world, at document_start; the SW can inject it into open tabs', () => {
   const m = JSON.parse(fs.readFileSync(path.join(root, 'extension/manifest.json'), 'utf8'));
   const cs = m.content_scripts.find((c) => c.js.includes('content/ai-hook.js'));
-  assert.deepEqual(cs.matches, ['https://gemini.google.com/*']); assert.equal(cs.world, 'MAIN'); assert.equal(cs.run_at, 'document_start');
+  assert.deepEqual(cs.matches, ['https://gemini.google.com/*', 'https://grok.com/*', 'https://claude.ai/*']); assert.equal(cs.world, 'MAIN'); assert.equal(cs.run_at, 'document_start');
   const sw = fs.readFileSync(path.join(root, 'extension/background/sw.js'), 'utf8');
   assert.match(sw, /case 'gpt:hook'/); assert.match(sw, /content\/ai-hook\.js'\], world: 'MAIN'/);
   const hk = fs.readFileSync(path.join(root, 'extension/content/ai-hook.js'), 'utf8');

@@ -4,6 +4,8 @@ A Manifest V3 Chrome extension for [DW Alliance](https://dwalliance.com) site ed
 
 ChatGPT is the first chat site and Chrome is the first browser. Adding another chat site later is a new JSON instructions file plus one config line, not a rewrite of the extension.
 
+**v0.1.13:** works with ChatGPT, Gemini, Grok (grok.com) and Claude (claude.ai); the editor session survives close, refresh and navigation (with **New session**); several editor tabs can each have their own AI tab; Publish is guarded against overwriting a live file that changed since you opened it; staged previews have **Add 10 min**. See [CHANGELOG.md](CHANGELOG.md).
+
 **Download:** [dwalliance.com/editor-ai](https://dwalliance.com/editor-ai/index.html) (packaged zip). This repository is the source, the test harness, and the tagged releases.
 
 > **Status.** The relay, controls, remote-update flow, pass checks and test harness are verified end to end against a **mock** ChatGPT page and mock DW site. The **live chatgpt.com selectors in `chatgpt.json` were verified on 2026-11-22 (revision 2) against the real signed-in site** (see [What is and is not verified](#what-is-and-is-not-verified)); file and image extraction from replies is the known gap.

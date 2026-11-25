@@ -1,5 +1,5 @@
 {
-  "_comment": "Single source of truth for host permissions. Edit, then run: npm run sync-hosts (rewrites extension/manifest.json matches and extension/config.json dwHosts). Hostnames only in 'patterns' are fetch-only (no content script). A host may appear in both dw and patterns (editor site that also hosts the static pattern file). No <all_urls>.",
+  "_comment": "Single source of truth for host permissions. Edit, then run: npm run sync-hosts (rewrites extension/manifest.json matches and extension/config.json dwHosts). Hostnames only in 'patterns' are fetch-only (no content script). A host may appear in both dw and patterns (editor site that also hosts the static pattern file). No <all_urls>. 'hook' lists AI hosts that get the page-world hook (content/ai-hook.js) at document_start.",
   "dw": [
     "app.dwalliance.com",
     "mingapothecary.com",
@@ -9,9 +9,16 @@
   ],
   "ai": [
     "chatgpt.com",
-    "gemini.google.com"
+    "gemini.google.com",
+    "grok.com",
+    "claude.ai"
   ],
   "patterns": [
     "dwalliance.com"
+  ],
+  "hook": [
+    "gemini.google.com",
+    "grok.com",
+    "claude.ai"
   ]
 }

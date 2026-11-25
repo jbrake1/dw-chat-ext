@@ -14,7 +14,22 @@
 
   // After the extension is reloaded or updated, this old script is orphaned: chrome.runtime.sendMessage throws
   // ("Extension context invalidated"). Report that instead of failing silently.
+  // v0.1.13: the editor session id (one per editor tab, kept by the page in sessionStorage). Every message to the service
+  // worker and every event to the page carries it, so each editor tab has its own AI tab and replies cannot cross.
+  var SID_RE = /^[A-Za-z0-9_-]{6,48}$/, SID_KEY = 'dw_ext_sid';
+  function curSid() {
+    if (S.sid && SID_RE.test(S.sid)) return S.sid;
+    var v = null;
+    try { v = sessionStorage.getItem(SID_KEY); } catch (e) {}
+    if (!v || !SID_RE.test(v)) {
+      var a = new Uint8Array(9); crypto.getRandomValues(a);
+      v = 's' + Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');   // this load only; the editor's own id wins
+    }
+    S.sid = v;
+    return v;
+  }
   function send(msg) {
+    if (msg && typeof msg.type === 'string' && msg.type.indexOf('dw:') === 0 && !msg.sid) msg.sid = curSid();
     try { return chrome.runtime.sendMessage(msg).catch(function () { return { ok: false, code: 'sw_unreachable' }; }); }
     catch (e) { return Promise.resolve({ ok: false, code: 'sw_unreachable' }); }
   }
@@ -39,7 +54,7 @@
       new Promise(function (_, rej) { t = setTimeout(function () { rej(Object.assign(new Error(code), { code: code })); }, ms); })
     ]).catch(function (e) { return { ok: false, code: (e && e.code) || code || 'timeout' }; });
   }
-  function toPage(type, extra) { window.postMessage(Object.assign({ source: 'dw-ext', type: type, v: 1 }, extra || {}), location.origin); }
+  function toPage(type, extra) { window.postMessage(Object.assign({ source: 'dw-ext', type: type, v: 1, sid: curSid() }, extra || {}), location.origin); }
   function emitStatus() {
     return send({ type: 'dw:pageStatus' }).then(function (r) {
       var st = DWX.pageStatus({
@@ -48,7 +63,8 @@
         ai: r && r.ai,
         revision: r && r.revision,
         editor: S.active,
-        provider: (r && r.provider) || (S.state && S.state.provider)
+        provider: (r && r.provider) || (S.state && S.state.provider),
+        allTaken: !!(r && r.allTaken)
       });
       toPage('dw-ext-status', st);
       return st;
@@ -214,7 +230,7 @@
     }
     if (follow && !note && !pf.files.length) { dwLog('submit_ignored', { why: 'empty_followup', via: via }); if (S.wantEvents) toPage('dw-ext-error', { code: 'empty_followup', step: 'submit' }); return; }
     var prompt = (follow ? String(note || '(see the attached files)') : buildPrompt({ note: note, pageUrl: d.pageUrl })) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
-    // v0.1.6: the editor may name the AI (dw-ext-submit provider: 'chatgpt' | 'gemini'); anything else is ignored.
+    // v0.1.6: the editor may name the AI (dw-ext-submit provider: 'chatgpt' | 'gemini' | 'grok' | 'claude'); anything else is ignored.
     var provider = (via === 'native' && DWX.providers.valid(d.provider)) ? d.provider : null;
     var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, followUp: follow, hadShot: !!shot, pageUrl: d.pageUrl || location.href, pagePath: pagePath() };
     submitJob(job);
@@ -328,6 +344,7 @@
     if (msg.type === 'sw:state') { S.state = msg.state; applyState(); return; }
     if (msg.type === 'sw:uploadSnap') { uploadSnapshot(msg.body).then(sendResponse); return true; }
     if (msg.type !== 'sw:event') return;
+    if (msg.sid && msg.sid !== curSid()) { dwLog('ev_other_session', {}); return; }   // v0.1.13: never show another session's reply
     var e = msg.event || {};
     var P = S.panel;
     if (e.kind === 'step' || e.kind === 'error' || e.kind === 'done') dwLog('ev:' + e.kind, { step: e.step, code: e.code, status: e.status, ok: e.ok });
@@ -369,6 +386,17 @@
     var d = ev.data;
     if (!d || typeof d !== 'object') return;
     if (d.source === 'dw-edit') {
+      if (typeof d.sid === 'string' && SID_RE.test(d.sid) && d.sid !== S.sid) { S.sid = d.sid; if (S.active) send({ type: 'dw:session' }); }
+      if (d.type === 'dw-ext-new-session') {
+        // v0.1.13: the editor started a new session: drop the old one's chat; the next Send opens a new chat.
+        S.jobId = null; S.pending = null;
+        if (S.active) send({ type: 'dw:newSession', prev: typeof d.prev === 'string' && SID_RE.test(d.prev) ? d.prev : null }).then(function () { emitStatus(); });
+        return;
+      }
+      if (d.type === 'dw-ext-new-ai-tab') {
+        if (S.active && Date.now() - S.lastGesture < 120000) send({ type: 'dw:newAiTab', provider: DWX.providers.valid(d.provider) ? d.provider : null }).then(function () { emitStatus(); });
+        return;
+      }
       if (d.type === 'dw-ext-hello') {
         S.nativeHook = true; S.nativePanel = d.panel === true; S.wantEvents = d.wantEvents !== false;
         if (S.nativePanel && S.panel) { S.panel.destroy(); S.panel = null; }

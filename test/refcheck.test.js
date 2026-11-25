@@ -72,8 +72,10 @@ test('one picture still missing: Publish is blocked and the path is listed; Chec
   assert.deepEqual(miss, ['MISSING: /assets/img/hanalei-taro-1600.jpg']);
   pub.click(); await sleep(50);
   assert.equal(calls.filter((c) => c.action === 'publish_staging').length, 0, 'a blocked Publish publishes nothing');
-  // the blocked state survives a reload of the card (sessionStorage)
-  const st = JSON.parse(win.sessionStorage.getItem('dw_ext_staged:/index.html'));
+  // the blocked state survives a reload of the card (v0.1.13: kept in the editor session, localStorage)
+  const sid = win.sessionStorage.getItem('dw_ext_sid');
+  assert.match(sid, /^[A-Za-z0-9_-]{6,48}$/);
+  const st = JSON.parse(win.localStorage.getItem('dw_ext_s:' + sid + ':staged'));
   assert.deepEqual(st.missing, ['/assets/img/hanalei-taro-1600.jpg']);
   win.__exists.add('/assets/img/hanalei-taro-1600.jpg');
   shadowAll(win, '[data-act=recheck]')[0].click();

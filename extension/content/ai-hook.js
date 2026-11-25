@@ -1,5 +1,5 @@
 /* DW Chat Integration: page-world upload hook for chat sites that open the OS file chooser from script (v0.1.9).
- * Injected by the manifest (gemini.google.com, document_start) and by the service worker into tabs that were already open.
+ * Injected by the manifest (gemini.google.com, grok.com, claude.ai; document_start) and by the service worker into tabs that were already open.
  * It only does anything while the extension has ARMED it with files, for a few seconds, around ONE click the extension makes
  * itself on the site's own "Upload files" menu item. In that window, when the site's code calls click() on an
  * <input type=file>, the files go straight into that input (input + change events) and the OS file chooser never opens.

@@ -50,7 +50,7 @@ test('markup.js: relay log logic works (unfinished request detected after a relo
 
 test('dw.js: send() survives an invalidated extension context; page log, diag handler, sw_unreachable text', () => {
   const s = read('extension/content/dw.js');
-  assert.ok(/function send\(msg\) \{\s*try \{/.test(s));
+  assert.ok(/function send\(msg\) \{\s*(?:if \(msg[^\n]*\n\s*)?try \{/.test(s));
   assert.ok(s.includes("sessionStorage.setItem(LOG_KEY"));
   assert.ok(s.includes("d.type === 'dw-ext-diag'") && s.includes("'dw-ext-diag-result'"));
   assert.ok(s.includes('sw_unreachable'));
@@ -66,8 +66,8 @@ test('sw.js: persisted relay log, diagnostics snapshot, injection into already-o
   assert.ok(/case 'popup:diag': if \(!fromExt\) return/.test(s));
 });
 
-test('popup has a Copy diagnostics button; manifest is 0.1.12', () => {
+test('popup has a Copy diagnostics button; manifest is 0.1.13', () => {
   assert.ok(read('extension/popup/popup.html').includes('id="diag"'));
   assert.ok(read('extension/popup/popup.js').includes('popup:diag'));
-  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.12');
+  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.13');
 });

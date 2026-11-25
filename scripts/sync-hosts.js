@@ -11,6 +11,7 @@ for (const h of all) if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(h)) throw new Error('b
 m.host_permissions = [...new Set([...hosts.ai, ...hosts.dw, ...(hosts.patterns || [])])].map(pat);
 m.content_scripts[0].matches = hosts.dw.map(pat);
 m.content_scripts[1].matches = hosts.ai.map(pat);
+if (hosts.hook && m.content_scripts[2]) m.content_scripts[2].matches = hosts.hook.map(pat);   // v0.1.13: page-world hook hosts
 c.dwHosts = hosts.dw;
 fs.writeFileSync(mp, JSON.stringify(m, null, 2) + '\n'); fs.writeFileSync(cp, JSON.stringify(c, null, 2) + '\n');
 console.log('manifest + config updated:', JSON.stringify(hosts));

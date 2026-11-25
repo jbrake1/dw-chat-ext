@@ -27,7 +27,7 @@
     }
     var pl = (s.providers || []).filter(function (p) { return p.id === s.provider; })[0];
     var pname = pl ? pl.label : 'ChatGPT';
-    $('pair-hint').textContent = t && t.canPair ? '' : 'On Send, an open ' + pname + ' tab is used (or one opens in the background). To pair one now: open chatgpt.com or gemini.google.com, sign in, then click this icon there.';
+    $('pair-hint').textContent = t && t.canPair ? '' : 'On Send, an open ' + pname + ' tab is used (or one opens in the background). To pair one now: open chatgpt.com, gemini.google.com, grok.com or claude.ai, sign in, then click this icon there.';
     var lines = Object.keys(s.instructions).map(function (k) {
       var i = s.instructions[k];
       return k + ': ' + i.version + ' (' + i.source + ', rev ' + i.revision + ')' + (i.verified ? '' : ' [unverified]') + (i.status ? ' last check: ' + i.status.status + (i.status.code ? ' ' + i.status.code : '') : '');
@@ -59,7 +59,7 @@
   $('snap').addEventListener('click', async function () {
     $('snap-status').textContent = 'Capturing…';
     var r = await chrome.runtime.sendMessage({ type: 'popup:snapshot' });
-    if (!r || !r.ok) { $('snap-status').textContent = 'Could not capture' + (r && r.code === 'no_ai_tab' ? ': open or pair a ChatGPT or Gemini tab, then try again.' : (r && r.code ? ' (' + r.code + ').' : '.')); return; }
+    if (!r || !r.ok) { $('snap-status').textContent = 'Could not capture' + (r && r.code === 'no_ai_tab' ? ': open or pair a ChatGPT, Gemini, Grok or Claude tab, then try again.' : (r && r.code ? ' (' + r.code + ').' : '.')); return; }
     if (r.via === 'download' && r.json) {
       var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.json], { type: 'application/json' })); a.download = r.filename || ('dw-snap-' + r.id + '.json'); document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
       $('snap-status').textContent = 'Downloaded. Snapshot id: ' + r.id + ' (no editor tab was available to upload it).';

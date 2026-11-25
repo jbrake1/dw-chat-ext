@@ -3,8 +3,8 @@
  * instructions JSON (instructions/<id>.json), which the generic interpreter runs and which can be updated remotely.
  *
  * Adapter interface:
- *   id               short id, also the instructions file name and the siteId used everywhere else ('chatgpt', 'gemini')
- *   label            name shown to the editor ('ChatGPT', 'Gemini')
+ *   id               short id, also the instructions file name and the siteId used everywhere else ('chatgpt', 'gemini', 'grok', 'claude')
+ *   label            name shown to the editor ('ChatGPT', 'Gemini', 'Grok', 'Claude')
  *   hosts            hostnames the chat runs on (pairing, host checks)
  *   tabMatches       chrome.tabs.query url patterns used to find an open tab to reuse
  *   newChatUrl       URL opened when no tab is open yet (always a fresh, empty conversation)
@@ -16,7 +16,7 @@
   'use strict';
   var DWX = root.DWX = root.DWX || {};
   var list = DWX.__providers = DWX.__providers || {};
-  var ORDER = ['chatgpt', 'gemini'];
+  var ORDER = ['chatgpt', 'gemini', 'grok', 'claude'];
   var DEFAULT_ID = 'chatgpt';
   var DEFAULT_MESSAGES = {
     not_logged_in: '{label} is not signed in. Sign in to {label} in that tab, then try again.',

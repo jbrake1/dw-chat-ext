@@ -21,7 +21,88 @@
   // Discard only drops staged bytes (and a staged-only new file); live files and history are never deleted.
   var XT = { acked: false, active: false, paired: false, job: null, host: null, root: null, box: null, app: false, sent: null, gotStatus: false, missing: false, timer: null, cdTimer: null, last: null };
   var XT_INSTALL = 'https://dwalliance.com/editor-ai/index.html#install';
-  var XT_AI = { chatgpt: 'ChatGPT', gemini: 'Gemini' };
+  // ----- v0.1.13: the editor session -----
+  // Each editor tab has its own session id (sessionStorage: it survives a refresh and moves with the tab through the site).
+  // Its note, markup, attached files, AI chat, staged previews and AI choice are kept in localStorage under that id for
+  // 7 days (about 3 MB each, oldest sessions dropped first), so closing the editor or refreshing never loses your place.
+  // A new tab picks up the newest session no other open tab is using; "New session" starts a clean one. Every message to
+  // the extension carries the id, so each editor tab gets its own AI tab and replies cannot cross.
+  var XS = { sidKey: 'dw_ext_sid', idx: 'dw_ext_sessions', pre: 'dw_ext_s:', ttl: 7 * 24 * 3600 * 1000, cap: 3000000, ownerMs: 15000, max: 12, owner: '', beat: null };
+  var XS_SID = /^[A-Za-z0-9_-]{6,48}$/;
+  function xsRand() {
+    var a = new Uint8Array(9), out = '';
+    try { window.crypto.getRandomValues(a); } catch (e) { for (var i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 256); }
+    for (var j = 0; j < a.length; j++) out += ('0' + a[j].toString(16)).slice(-2);
+    return out;
+  }
+  function xsIdxGet() { try { var v = JSON.parse(localStorage.getItem(XS.idx) || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } }
+  function xsIdxSet(o) { try { localStorage.setItem(XS.idx, JSON.stringify(o)); } catch (e) {} }
+  function xsKeysOf(sid) {
+    var out = [], pre = XS.pre + sid + ':';
+    try { for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf(pre) === 0) out.push(k); } } catch (e) {}
+    return out;
+  }
+  function xsDrop(sid) {
+    xsKeysOf(sid).forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+    var idx = xsIdxGet(); delete idx[sid]; xsIdxSet(idx);
+  }
+  // Drop sessions older than 7 days; past XS.max (or when storage is full) drop the oldest ones no open tab is using.
+  function xsPurge(keep, hard) {
+    var idx = xsIdxGet(), now = Date.now();
+    Object.keys(idx).forEach(function (k) { if (!idx[k] || now - (idx[k].t || 0) > XS.ttl) { xsKeysOf(k).forEach(function (x) { try { localStorage.removeItem(x); } catch (e) {} }); delete idx[k]; } });
+    var idle = Object.keys(idx).filter(function (k) { return k !== keep && now - (idx[k].hb || 0) > XS.ownerMs; }).sort(function (a, b) { return (idx[a].t || 0) - (idx[b].t || 0); });
+    var over = hard ? Math.max(1, Math.ceil(idle.length / 2)) : Math.max(0, Object.keys(idx).length - XS.max);
+    idle.slice(0, over).forEach(function (k) { xsKeysOf(k).forEach(function (x) { try { localStorage.removeItem(x); } catch (e) {} }); delete idx[k]; });
+    xsIdxSet(idx);
+    return over > 0;
+  }
+  function xsBeat() {
+    var idx = xsIdxGet(), r = idx[XT.sid] || (idx[XT.sid] = { t: Date.now() });
+    if (r.owner && r.owner !== XS.owner && Date.now() - (r.hb || 0) < XS.ownerMs) return;   // another tab took this session
+    r.owner = XS.owner; r.hb = Date.now(); xsIdxSet(idx);
+  }
+  function xsClaim(sid) {
+    XT.sid = sid;
+    try { sessionStorage.setItem(XS.sidKey, sid); } catch (e) {}
+    var idx = xsIdxGet(); idx[sid] = { t: (idx[sid] && idx[sid].t) || Date.now(), hb: Date.now(), owner: XS.owner }; xsIdxSet(idx);
+  }
+  function xsInit() {
+    XS.owner = xsRand();
+    var sid = null, idx = xsIdxGet(), now = Date.now();
+    try { sid = sessionStorage.getItem(XS.sidKey); } catch (e) {}
+    if (sid && !XS_SID.test(sid)) sid = null;
+    // A duplicated tab copies sessionStorage: if another live tab owns this id, start a new session here.
+    if (sid && idx[sid] && idx[sid].owner && now - (idx[sid].hb || 0) < XS.ownerMs) sid = null;
+    if (!sid) {
+      var best = null;
+      Object.keys(idx).forEach(function (k) {
+        var r = idx[k];
+        if (XS_SID.test(k) && r && now - (r.hb || 0) >= XS.ownerMs && now - (r.t || 0) < XS.ttl && (!best || (r.t || 0) > (idx[best].t || 0))) best = k;
+      });
+      sid = best || ('s' + xsRand());
+    }
+    xsClaim(sid);
+    xsPurge(sid, false);
+    XS.beat = setInterval(xsBeat, 5000);
+    window.addEventListener('pagehide', function () { var i2 = xsIdxGet(); if (i2[XT.sid] && i2[XT.sid].owner === XS.owner) { i2[XT.sid].hb = 0; xsIdxSet(i2); } });
+    window.addEventListener('pageshow', function (e) { if (e.persisted) xsBeat(); });
+  }
+  function xsKey(k) { return XS.pre + XT.sid + ':' + k; }
+  function xsGet(k) { try { return localStorage.getItem(xsKey(k)); } catch (e) { return null; } }
+  function xsGetJson(k) { try { return JSON.parse(xsGet(k) || 'null'); } catch (e) { return null; } }
+  function xsDel(k) { try { localStorage.removeItem(xsKey(k)); } catch (e) {} }
+  // Throws when this session would pass its size cap, or storage stays full after dropping older sessions.
+  function xsSet(k, str) {
+    var key = xsKey(k), used = 0;
+    xsKeysOf(XT.sid).forEach(function (x) { if (x !== key) { try { used += (localStorage.getItem(x) || '').length; } catch (e) {} } });
+    if (used + str.length > XS.cap) throw new Error('session_full');
+    try { localStorage.setItem(key, str); }
+    catch (e) { if (!xsPurge(XT.sid, true)) throw e; localStorage.setItem(key, str); }
+    var idx = xsIdxGet(); if (idx[XT.sid]) { idx[XT.sid].t = Date.now(); xsIdxSet(idx); }
+  }
+  function xsSetJson(k, v) { if (v == null) { xsDel(k); return; } xsSet(k, JSON.stringify(v)); }
+  xsInit();
+  var XT_AI = { chatgpt: 'ChatGPT', gemini: 'Gemini', grok: 'Grok', claude: 'Claude' };   // v0.1.13: + Grok, Claude
   // v0.1.6: which AI gets the request (ChatGPT or Gemini). Remembered here and by the extension (it reports it in its status).
   var XT_AI_KEY = 'dw_ext_ai';
   function xtAiPref() {
@@ -76,7 +157,7 @@
     } catch (e) { return false; }
   }
   var XT_VER = /^[0-9A-Za-z._-]{1,32}$/;
-  function xtPost(type, extra) { var m = { source: 'dw-edit', type: type, v: 1 }; for (var k in (extra || {})) m[k] = extra[k]; window.postMessage(m, location.origin); }
+  function xtPost(type, extra) { var m = { source: 'dw-edit', type: type, v: 1, sid: XT.sid }; for (var k in (extra || {})) m[k] = extra[k]; window.postMessage(m, location.origin); }
   function xtHello() { xtPost('dw-ext-hello', { panel: true, wantEvents: true }); }
   function xtAskStatus() { xtPost('dw-ext-status'); }
   function xtVer(v) { v = String(v || ''); return v ? (v.charAt(0) === 'v' ? v : 'v' + v) : ''; }
@@ -88,7 +169,8 @@
     var ai = (paired && typeof d.ai === 'string' && XT_AI[d.ai]) ? d.ai : null;
     var revision = (typeof d.revision === 'number' && isFinite(d.revision) && d.revision >= 0 && d.revision === Math.floor(d.revision)) ? d.revision : null;
     var provider = (editor && typeof d.provider === 'string' && XT_AI[d.provider]) ? d.provider : null;   // v0.1.6+ only
-    return { extVersion: extVersion, paired: paired, ai: ai, revision: revision, editor: editor, provider: provider };
+    var allTaken = editor && !paired && d.allTaken === true;                    // v0.1.13: every open AI tab belongs to another editor tab
+    return { extVersion: extVersion, paired: paired, ai: ai, revision: revision, editor: editor, provider: provider, allTaken: allTaken };
   }
   function xtLine(st) {
     if (!st) return { state: 'missing', text: 'AI/SI Editor extension not installed', href: XT_INSTALL, link: 'Install the extension', on: false };
@@ -100,8 +182,12 @@
     if (st.paired && st.ai && (!st.provider || st.ai === st.provider)) {
       return { state: 'paired', text: 'Paired with ' + XT_AI[st.ai] + ' (' + (ver || 'extension') + ')', href: null, on: true };
     }
+    if (st.allTaken) {
+      var nm = XT_AI[st.provider || xtAiPref()] || 'AI';
+      return { state: 'all-taken', text: inst + '. Every open AI tab is in use by another editor tab, so this one gets its own: on Send a new ' + nm + ' tab opens.', href: null, on: true, btn: 'Open a new ' + nm + ' tab now' };
+    }
     if (st.provider) return { state: 'unpaired', text: inst + ', ' + XT_AI[st.provider] + ': an open ' + XT_AI[st.provider] + ' tab is used on Send, or one opens', href: null, on: true };
-    return { state: 'unpaired', text: inst + ', not paired: open a ChatGPT or Gemini tab and click Pair this tab', href: null, on: false };
+    return { state: 'unpaired', text: inst + ', not paired: open a ChatGPT, Gemini, Grok or Claude tab and click Pair this tab', href: null, on: false };
   }
   function xtPaintStatus() {
     if (!ui.note) return;
@@ -133,6 +219,12 @@
       txt.appendChild(document.createTextNode(' '));
       var a = el('a', { href: line.href, target: '_blank', rel: 'noopener noreferrer' }, line.link);
       txt.appendChild(a);
+    }
+    if (line.btn) {
+      txt.appendChild(document.createTextNode(' '));
+      var nb = el('button', { type: 'button', class: 'linkbtn', 'data-act': 'new-ai-tab' }, line.btn);
+      nb.addEventListener('click', function () { nb.disabled = true; nb.textContent = 'Opening\u2026'; xtPost('dw-ext-new-ai-tab', { provider: xtAiPref() }); });
+      txt.appendChild(nb);
     }
   }
   function xtApplyStatus(st) {
@@ -197,8 +289,8 @@
   // v0.1.11: the editor feed and the last reply's code blocks, per page, in this tab (sessionStorage).
   // A refresh remounts the chat. Large screenshots are not stored (quota). The extension also keeps the last job
   // result and can re-read the AI tab if the reply finished after this page was gone.
-  var XT_FEED_KEY = 'dw_ext_feed', XT_FEED_TTL = 30 * 60 * 1000;
-  function xtFeedStoreKey() { return XT_FEED_KEY + ':' + xtPagePath(); }
+  // v0.1.13: kept per editor session (localStorage, 7 days), for every page of the site, not per page for 30 minutes.
+  var XT_FEED_KEY = 'feed', XT_FEED_TTL = 7 * 24 * 3600 * 1000;
   function xtSentLite(sent) {
     return (Array.isArray(sent) ? sent : []).map(function (f) {
       var row = { path: f.path, name: f.name, base: f.base || xtBase(f.path || f.name || ''), kind: f.kind, page: !!f.page };
@@ -209,17 +301,16 @@
     });
   }
   // v0.1.12: the pictures attached with no path, kept for this tab (sessionStorage) so a refresh does not lose them.
-  function xtLooseKey() { return 'dw_ext_loose:' + xtPagePath(); }
   function xtLooseSave(sent) {
     try {
       var keep = (sent || []).filter(function (s) { return s.loose && s.dataUrl; }).map(function (s) { return { name: s.name, dataUrl: s.dataUrl }; });
       var size = keep.reduce(function (n, k) { return n + k.dataUrl.length; }, 0);
-      if (!keep.length || size > 3500000) sessionStorage.removeItem(xtLooseKey()); else sessionStorage.setItem(xtLooseKey(), JSON.stringify(keep));
-    } catch (e) { try { sessionStorage.removeItem(xtLooseKey()); } catch (e2) {} }
+      if (!keep.length || size > 1500000) xsDel('loose'); else xsSetJson('loose', keep);
+    } catch (e) { xsDel('loose'); }
   }
   function xtLooseHydrate(sent) {
     try {
-      var keep = JSON.parse(sessionStorage.getItem(xtLooseKey()) || 'null');
+      var keep = xsGetJson('loose');
       if (!Array.isArray(keep) || !Array.isArray(sent)) return sent;
       sent.forEach(function (s) { if (s.loose && !s.dataUrl) { var k = keep.filter(function (x) { return x && x.name === s.name; })[0]; if (k && typeof k.dataUrl === 'string') s.dataUrl = k.dataUrl; } });
     } catch (e) {}
@@ -236,26 +327,26 @@
   }
   function xtFeedRecordGet() {
     try {
-      var v = JSON.parse(sessionStorage.getItem(xtFeedStoreKey()) || 'null');
-      if (!v || v.v < 1 || v.path !== xtPagePath() || !v.t || Date.now() - v.t > XT_FEED_TTL) return null;
+      var v = xsGetJson(XT_FEED_KEY);
+      if (!v || v.v < 1 || !v.t || Date.now() - v.t > XT_FEED_TTL) return null;
       return v;
     } catch (e) { return null; }
   }
   function xtFeedRecordSet(v) {
-    if (!v) { try { sessionStorage.removeItem(xtFeedStoreKey()); } catch (e) {} return; }
+    if (!v) { xsDel(XT_FEED_KEY); return; }
     var o = {
       v: 1, path: xtPagePath(), t: Date.now(), ai: v.ai || XT.ai || '', jobId: v.jobId || XT.job || null,
       note: String(v.note || '').slice(0, 5000), steps: Array.isArray(v.steps) ? v.steps.slice(0, 40) : xtFeedStepsSnap(),
       state: v.state || '', text: String(v.text || ''), files: Array.isArray(v.files) ? v.files.slice(0, 20) : [],
       blocks: Array.isArray(v.blocks) ? v.blocks.slice(0, 12) : [], status: v.status || '',
       error: v.error ? { code: String(v.error.code || '').slice(0, 80), step: String(v.error.step || '').slice(0, 40) } : null,
-      sent: xtSentLite(v.sent || XT.sent),
+      sent: xtSentLite(v.sent || XT.sent), handled: v.handled || null,
       history: Array.isArray(v.history) ? v.history.slice(-6).map(function (h) { return { note: String(h && h.note || '').slice(0, 2000), text: String(h && h.text || '').slice(0, 60000) }; }) : []
     };
-    try { sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
+    try { xsSetJson(XT_FEED_KEY, o); }
     catch (e) {
-      try { o.sent = (o.sent || []).map(function (f) { return { path: f.path, name: f.name, base: f.base, kind: f.kind, page: !!f.page, attach: !!f.attach }; }); sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); }
-      catch (e2) { try { delete o.files; o.history = (o.history || []).slice(-2); sessionStorage.setItem(xtFeedStoreKey(), JSON.stringify(o)); } catch (e3) {} }
+      try { o.sent = (o.sent || []).map(function (f) { return { path: f.path, name: f.name, base: f.base, kind: f.kind, page: !!f.page, attach: !!f.attach }; }); xsSetJson(XT_FEED_KEY, o); }
+      catch (e2) { try { delete o.files; o.history = (o.history || []).slice(-2); o.text = o.text.slice(0, 200000); xsSetJson(XT_FEED_KEY, o); } catch (e3) {} }
     }
   }
   function xtFeedPersist(extra) {
@@ -274,6 +365,7 @@
     xtFeedRecordSet(rec);
   }
   function xtFeedPersistDone(d) {
+    if (XT.feedPersistT) { clearTimeout(XT.feedPersistT); XT.feedPersistT = null; }
     xtFeedPersist({ text: d && d.text, files: d && d.files, blocks: d && d.blocks, status: (d && d.status) || 'complete', state: (d && d.status === 'stopped') ? 'stopped' : 'done' });
   }
   function xtAskReplay() {
@@ -289,12 +381,12 @@
   function xtRestoreFeed0(fromExt) {
     var v = fromExt && (fromExt.text || fromExt.note || (fromExt.blocks && fromExt.blocks.length) || fromExt.status) ? fromExt : xtFeedRecordGet();
     if (!v) return false;
-    if (v.path && v.path !== xtPagePath()) return false;
+    if (fromExt && v === fromExt && v.path && v.path !== xtPagePath() && !(XT.feedRec && XT.feedRec.jobId === v.jobId)) return false;
     var haveDone = XT.feed && XT.feed.querySelector('[data-role=reply][data-done=complete]');
     var incoming = fromExt && fromExt.status === 'complete' && fromExt.text && String(fromExt.text).length;
     var haveLen = (XT.feedReply && XT.feedReply.getAttribute('data-plain') || '').length;
     if (haveDone && !(incoming && incoming > haveLen)) {
-      if (fromExt && fromExt.status === 'complete' && !xtStagedGet() && (fromExt.blocks || fromExt.text)) {
+      if (fromExt && fromExt.status === 'complete' && !xtStagedGet() && (fromExt.blocks || fromExt.text) && (XT.feedRec || {}).handled !== xtHandledKey(fromExt.jobId || (XT.feedRec || {}).jobId, fromExt.text)) {
         if (v.sent && v.sent.length) XT.sent = xtLooseHydrate(v.sent);
         xtDone({ status: 'complete', text: fromExt.text, files: fromExt.files, blocks: fromExt.blocks }, true);
       }
@@ -309,13 +401,15 @@
     (v.steps || []).forEach(function (s) { if (s && (s.name || s.label)) xtFeedAddStep(s.name || 'step', !!s.ok, s.label || xtFeedLabel(s.name || '')); });
     var text = v.text || '', files = v.files || [], blocks = v.blocks || [], status = v.status || '';
     if (text || (blocks && blocks.length)) {
-      if (status === 'complete' || status === 'stopped' || v.state === 'done' || v.state === 'stopped') xtFeedDone({ text: text, files: files, blocks: blocks, status: status || 'complete' });
+      if (status === 'complete' || status === 'stopped' || v.state === 'done' || v.state === 'stopped') xtFeedDone({ text: text, files: files, blocks: blocks, status: (status === 'stopped' || v.state === 'stopped') ? 'stopped' : (status && status !== 'streaming' && status !== 'sending' ? status : 'complete') });
       else xtFeedChunk(text, files);
     }
     if (v.error && v.error.code) xtFeedError(v.error.code, v.error.step, v.error);
-    XT.feedRec = { note: v.note, text: text, files: files, blocks: blocks, status: status, state: v.state, ai: XT.ai, jobId: v.jobId, sent: XT.sent, history: hist };
+    var handled = (v.handled || (st0 && st0.jobId === v.jobId && st0.handled)) || null;
+    XT.feedRec = { note: v.note, text: text, files: files, blocks: blocks, status: status, state: v.state, ai: XT.ai, jobId: v.jobId, sent: XT.sent, history: hist, handled: handled };
     xtFeedRecordSet(XT.feedRec);
-    if ((status === 'complete' || v.state === 'done') && !xtStagedGet()) xtDone({ status: 'complete', text: text, files: files, blocks: blocks }, true);
+    // v0.1.13: a reply whose files were already staged (then published, discarded or expired) is not staged again.
+    if ((status === 'complete' || v.state === 'done') && !xtStagedGet() && handled !== xtHandledKey(v.jobId, text)) xtDone({ status: 'complete', text: text, files: files, blocks: blocks }, true);
     xtLog('feed_restored', { state: v.state || status, hasText: !!text, from: fromExt ? 'ext' : 'store' });
     return true;
   }
@@ -395,6 +489,7 @@
   window.addEventListener('message', function (e) {
     if (e.source !== window || e.origin !== location.origin || !e.data || e.data.v !== 1) return;
     var d = e.data;
+    if (d.source === 'dw-ext' && typeof d.sid === 'string' && d.sid && d.sid !== XT.sid && /^dw-ext-(step|chunk|done|error|restore)$/.test(d.type)) return;   // v0.1.13: another editor session's reply
     if (d.source === 'dw-ext' && d.type === 'dw-ext-diag-result') { if (XT.diagWait) XT.diagWait(d.ext ? { ext: d.ext, extPage: d.page, extVersion: d.extVersion, active: d.active } : null); return; }
     if (d.source === 'dw-ext' && d.type === 'dw-ext-snapshot-result') { if (XT.snapWait) XT.snapWait(d); return; }
     if (d.source === 'dw-ext') xtLogEv(d);
@@ -445,6 +540,7 @@
           element: { selectors: sels, capture: capture, viewport: viewport } };
         if (XT.ai && XT_AI[XT.ai]) msg.provider = XT.ai;                          // the picker (or pref); not a stale localStorage value
         xtRemember(all);
+        xtBaseRecord([xtPagePath()].concat((XT.sent || []).filter(function (f) { return f.path && !f.loose; }).map(function (f) { return f.path; })));   // v0.1.13
         XT.lastSend = { id: msg.id, screenshot: msg.screenshot, note: note, pageUrl: msg.pageUrl, element: msg.element, provider: XT.ai, hadFiles: all.length > 0 };
         if (c || att.length) {
           msg.files = all; msg.skipped = c ? c.skipped : [];
@@ -456,6 +552,166 @@
         xtWaitForRelay();
       } catch (e) { xtFeedError('submit_failed', 'submit', {}); }
     }, function () { if (!XT.aborted) xtFeedError('collect_failed', 'collect', {}); });
+  }
+
+  // ----- v0.1.13: the unsent draft (note, markup, attached files, options), kept in the editor session -----
+  var XT_DRAFT_ATT_MAX = 1500000;
+  function xsDraftGet() { var d = xsGetJson('draft'); return d && d.v === 1 ? d : null; }
+  function xsDraftSave(open) {
+    if (XS.draftTimer) { clearTimeout(XS.draftTimer); XS.draftTimer = null; }
+    var prev = xsDraftGet() || {};
+    var att = XT_ATT.map(function (a) { return { name: a.name, size: a.size, ext: a.ext, path: a.path || '', dataUrl: a.dataUrl || null }; }), total = 0;
+    att.forEach(function (a) { if (!a.dataUrl) { a.dropped = true; return; } if (total + a.dataUrl.length > XT_DRAFT_ATT_MAX) { a.dataUrl = null; a.dropped = true; } else total += a.dataUrl.length; });
+    var d = { v: 1, t: Date.now(), open: open == null ? !!active : !!open, path: xtPagePath(), note: ui.text ? ui.text.value : (prev.note || ''),
+      shapes: active ? shapes.slice(0, 400) : (prev.shapes || []), att: active ? att : (prev.att || []), ai: ui.aiSel ? ui.aiSel.value : (prev.ai || null),
+      files: ui.filesChk ? !!ui.filesChk.checked : (prev.files == null ? null : prev.files), tool: active ? tool : (prev.tool || 'pen') };
+    if (!active) d.path = prev.path || d.path;
+    if (!d.note && !d.shapes.length && !d.att.length && !d.open) { xsDel('draft'); return; }
+    try { xsSetJson('draft', d); }
+    catch (e) { d.att.forEach(function (a) { if (a.dataUrl) { a.dataUrl = null; a.dropped = true; } }); try { xsSetJson('draft', d); } catch (e2) {} }
+  }
+  function xsDraftSoon() { if (!active) return; if (XS.draftTimer) clearTimeout(XS.draftTimer); XS.draftTimer = setTimeout(function () { XS.draftTimer = null; if (active) xsDraftSave(); }, 400); }
+  function xsBlobOf(dataUrl) {
+    var m = /^data:([^;,]+);base64,(.*)$/.exec(dataUrl || ''); if (!m) return null;
+    var b = atob(m[2]), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+    return new Blob([u], { type: m[1] });
+  }
+  // Put the draft back into a freshly opened editor. Returns a note for the person, or ''.
+  function xsDraftRestore() {
+    var d = xsDraftGet(); if (!d) return '';
+    var msg = [];
+    if (ui.text && typeof d.note === 'string') ui.text.value = d.note.slice(0, 5000);
+    if (Array.isArray(d.shapes) && d.shapes.length) {
+      if (d.path === xtPagePath()) shapes = d.shapes.filter(function (x) { return x && typeof x.t === 'string'; });
+      else msg.push('Your markup was drawn on ' + d.path + ', so it is not shown on this page.');
+    }
+    if (ui.filesChk && typeof d.files === 'boolean') ui.filesChk.checked = d.files;
+    if (ui.aiSel && d.ai && XT_AI[d.ai]) { ui.aiSel.value = d.ai; XT.ai = d.ai; }
+    if (typeof d.tool === 'string' && d.tool !== 'text') tool = d.tool;
+    var lost = [];
+    (Array.isArray(d.att) ? d.att : []).forEach(function (a) {
+      var blob = a && a.dataUrl ? xsBlobOf(a.dataUrl) : null;
+      if (!blob) { if (a && a.name) lost.push(a.name); return; }
+      XT_ATT.push({ id: ++XT_ATT_SEQ, file: blob, name: a.name, ext: a.ext || xtExt(a.name), size: a.size || blob.size, path: a.path || '', err: '', dataUrl: a.dataUrl });
+    });
+    if (lost.length) msg.push('Attach again: ' + lost.join(', ') + ' (too large to keep while the editor was closed).');
+    return msg.join(' ');
+  }
+
+  // ----- v0.1.13: New session -----
+  // Clears this tab's session (note, markup, attached files, chat, unpublished previews) and starts a new one; the next Send
+  // opens a new chat with the AI. Other editor tabs keep their own sessions.
+  function xsNewSession() {
+    if (!window.confirm('Start a new session? This clears your note, markup, attached files and the AI chat in this tab, and discards any preview you have not published. The next Send starts a new chat with the AI.')) return;
+    var st = xtStagedGet(), old = XT.sid;
+    var p = st && st.items.length ? xtEach(st.items, function (it) { return xtCall({ action: 'discard_staging', id: it.id }); }) : Promise.resolve([]);
+    xtLog('new_session', { staged: st ? st.items.length : 0 });
+    return p.then(null, function () { return []; }).then(function () {
+      if (XT.cdTimer) { clearInterval(XT.cdTimer); XT.cdTimer = null; }
+      if (XT.box && XT.box.parentNode) XT.box.parentNode.removeChild(XT.box);
+      XT.box = null;
+      xtFeedClose();
+      XT.feedRec = null; XT.sent = null; XT.job = null; XT.lastSend = null; XT.aborted = false;
+      xsDrop(old);
+      xsClaim('s' + xsRand());
+      xtPost('dw-ext-new-session', { prev: old });
+      if (active) {
+        if (ui.text) ui.text.value = '';
+        shapes = []; XT_ATT = []; xtAttRender(''); redraw(); xsDel('draft');
+      }
+      toast('New session started. The next Send opens a new chat with ' + xtAiName(xtAiPref()) + '.');
+    });
+  }
+
+  // ----- v0.1.13: overwrite guard -----
+  // When a session first sends, the live bytes of each file it may change are fingerprinted (md5 of what the public site
+  // serves, fetched without cookies so a staged preview never counts as live). When the staged-preview answer carries the
+  // server's own md5 of the live file (/files md5 support; field names below, also given by a=status), and the live file
+  // still matches the session's fingerprint, Publish sends that md5 as expect_md5 and the server refuses a file that changed
+  // (409 md5_mismatch, nothing written). Without server support (an answer with no md5), Publish first fetches the live
+  // files again and compares them itself. Either way a change shows "changed since you opened it" with Reload or
+  // Overwrite anyway. A brand-new file has no live md5 and never carries expect_md5.
+  var XT_MD5 = { server: false, live: 'md5', staged: 'staging_md5', expect: 'expect_md5' };
+  function xtMd5(bytes) {
+    function add(x, y) { var l = (x & 0xffff) + (y & 0xffff); return (((x >> 16) + (y >> 16) + (l >> 16)) << 16) | (l & 0xffff); }
+    function rol(n, c) { return (n << c) | (n >>> (32 - c)); }
+    function cmn(q, a, b, x, s2, t) { return add(rol(add(add(a, q), add(x, t)), s2), b); }
+    function ff(a, b, c, d, x, s2, t) { return cmn((b & c) | (~b & d), a, b, x, s2, t); }
+    function gg(a, b, c, d, x, s2, t) { return cmn((b & d) | (c & ~d), a, b, x, s2, t); }
+    function hh(a, b, c, d, x, s2, t) { return cmn(b ^ c ^ d, a, b, x, s2, t); }
+    function ii(a, b, c, d, x, s2, t) { return cmn(c ^ (b | ~d), a, b, x, s2, t); }
+    var n = bytes.length, words = new Int32Array((((n + 8) >> 6) + 1) * 16), i;
+    for (i = 0; i < n; i++) words[i >> 2] |= bytes[i] << ((i % 4) * 8);
+    words[n >> 2] |= 0x80 << ((n % 4) * 8);
+    words[words.length - 2] = n * 8; words[words.length - 1] = Math.floor(n / 536870912);
+    var a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+    for (i = 0; i < words.length; i += 16) {
+      var oa = a, ob = b, oc = c, od = d, x = words;
+      a = ff(a, b, c, d, x[i], 7, -680876936); d = ff(d, a, b, c, x[i + 1], 12, -389564586); c = ff(c, d, a, b, x[i + 2], 17, 606105819); b = ff(b, c, d, a, x[i + 3], 22, -1044525330);
+      a = ff(a, b, c, d, x[i + 4], 7, -176418897); d = ff(d, a, b, c, x[i + 5], 12, 1200080426); c = ff(c, d, a, b, x[i + 6], 17, -1473231341); b = ff(b, c, d, a, x[i + 7], 22, -45705983);
+      a = ff(a, b, c, d, x[i + 8], 7, 1770035416); d = ff(d, a, b, c, x[i + 9], 12, -1958414417); c = ff(c, d, a, b, x[i + 10], 17, -42063); b = ff(b, c, d, a, x[i + 11], 22, -1990404162);
+      a = ff(a, b, c, d, x[i + 12], 7, 1804603682); d = ff(d, a, b, c, x[i + 13], 12, -40341101); c = ff(c, d, a, b, x[i + 14], 17, -1502002290); b = ff(b, c, d, a, x[i + 15], 22, 1236535329);
+      a = gg(a, b, c, d, x[i + 1], 5, -165796510); d = gg(d, a, b, c, x[i + 6], 9, -1069501632); c = gg(c, d, a, b, x[i + 11], 14, 643717713); b = gg(b, c, d, a, x[i], 20, -373897302);
+      a = gg(a, b, c, d, x[i + 5], 5, -701558691); d = gg(d, a, b, c, x[i + 10], 9, 38016083); c = gg(c, d, a, b, x[i + 15], 14, -660478335); b = gg(b, c, d, a, x[i + 4], 20, -405537848);
+      a = gg(a, b, c, d, x[i + 9], 5, 568446438); d = gg(d, a, b, c, x[i + 14], 9, -1019803690); c = gg(c, d, a, b, x[i + 3], 14, -187363961); b = gg(b, c, d, a, x[i + 8], 20, 1163531501);
+      a = gg(a, b, c, d, x[i + 13], 5, -1444681467); d = gg(d, a, b, c, x[i + 2], 9, -51403784); c = gg(c, d, a, b, x[i + 7], 14, 1735328473); b = gg(b, c, d, a, x[i + 12], 20, -1926607734);
+      a = hh(a, b, c, d, x[i + 5], 4, -378558); d = hh(d, a, b, c, x[i + 8], 11, -2022574463); c = hh(c, d, a, b, x[i + 11], 16, 1839030562); b = hh(b, c, d, a, x[i + 14], 23, -35309556);
+      a = hh(a, b, c, d, x[i + 1], 4, -1530992060); d = hh(d, a, b, c, x[i + 4], 11, 1272893353); c = hh(c, d, a, b, x[i + 7], 16, -155497632); b = hh(b, c, d, a, x[i + 10], 23, -1094730640);
+      a = hh(a, b, c, d, x[i + 13], 4, 681279174); d = hh(d, a, b, c, x[i], 11, -358537222); c = hh(c, d, a, b, x[i + 3], 16, -722521979); b = hh(b, c, d, a, x[i + 6], 23, 76029189);
+      a = hh(a, b, c, d, x[i + 9], 4, -640364487); d = hh(d, a, b, c, x[i + 12], 11, -421815835); c = hh(c, d, a, b, x[i + 15], 16, 530742520); b = hh(b, c, d, a, x[i + 2], 23, -995338651);
+      a = ii(a, b, c, d, x[i], 6, -198630844); d = ii(d, a, b, c, x[i + 7], 10, 1126891415); c = ii(c, d, a, b, x[i + 14], 15, -1416354905); b = ii(b, c, d, a, x[i + 5], 21, -57434055);
+      a = ii(a, b, c, d, x[i + 12], 6, 1700485571); d = ii(d, a, b, c, x[i + 3], 10, -1894986606); c = ii(c, d, a, b, x[i + 10], 15, -1051523); b = ii(b, c, d, a, x[i + 1], 21, -2054922799);
+      a = ii(a, b, c, d, x[i + 8], 6, 1873313359); d = ii(d, a, b, c, x[i + 15], 10, -30611744); c = ii(c, d, a, b, x[i + 6], 15, -1560198380); b = ii(b, c, d, a, x[i + 13], 21, 1309151649);
+      a = ii(a, b, c, d, x[i + 4], 6, -145523070); d = ii(d, a, b, c, x[i + 11], 10, -1120210379); c = ii(c, d, a, b, x[i + 2], 15, 718787259); b = ii(b, c, d, a, x[i + 9], 21, -343485551);
+      a = add(a, oa); b = add(b, ob); c = add(c, oc); d = add(d, od);
+    }
+    var out = ''; [a, b, c, d].forEach(function (w) { for (var j = 0; j < 4; j++) out += ('0' + ((w >>> (j * 8)) & 255).toString(16)).slice(-2); });
+    return out;
+  }
+  // The live file's fingerprint: its md5, or 'absent:<status>' when the public site does not serve it.
+  function xtLiveMd5(path) {
+    return fetch(path, { credentials: 'omit', cache: 'no-store', redirect: 'follow' }).then(function (r) {
+      if (!r.ok) return 'absent:' + r.status;
+      return r.arrayBuffer().then(function (buf) { return xtMd5(new Uint8Array(buf)); });
+    }).then(null, function () { return 'error'; });
+  }
+  function xtBaseGet() { var b = xsGetJson('base'); return b && typeof b === 'object' && b.paths ? b : { paths: {} }; }
+  // Fingerprint the paths this session has not seen yet (its first sight of a file is its baseline).
+  function xtBaseRecord(paths) {
+    var b = xtBaseGet(), todo = [];
+    (paths || []).forEach(function (p) { if (p && typeof p === 'string' && !b.paths[p] && todo.indexOf(p) < 0 && todo.length < 40) todo.push(p); });
+    if (!todo.length) return Promise.resolve(b);
+    return Promise.all(todo.map(function (p) { return xtLiveMd5(p).then(function (m) { return [p, m]; }); })).then(function (rs) {
+      var cur = xtBaseGet();
+      rs.forEach(function (r) { if (r[1] !== 'error' && !cur.paths[r[0]]) cur.paths[r[0]] = { m: r[1], t: Date.now() }; });
+      try { xsSetJson('base', cur); } catch (e) {}
+      xtLog('baseline', { files: rs.length });
+      return cur;
+    });
+  }
+  // The staged paths whose live file changed since its baseline.
+  function xtGuardCheck(items) {
+    var b = xtBaseGet();
+    var paths = (items || []).map(function (it) { return it.path; }).filter(function (p) { return b.paths[p]; });
+    return Promise.all(paths.map(function (p) { return xtLiveMd5(p).then(function (m) { return m !== 'error' && m !== b.paths[p].m ? p : null; }); }))
+      .then(function (r) { var ch = r.filter(Boolean); xtLog('guard', { checked: paths.length, changed: ch.length }); return ch; });
+  }
+  function xtPublishBody(it, force) {
+    var body = { action: 'publish_staging', id: it.id };
+    if (!force && !it.isNew && XT_MD5.expect && typeof it.expect === 'string' && /^[a-f0-9]{32}$/.test(it.expect)) body[XT_MD5.expect] = it.expect;
+    return body;
+  }
+  // The server's md5 of the live file from a staged-preview answer, or null (no md5 support on that node, or a new file).
+  function xtServerMd5(res) {
+    var f = res && res.file, k = XT_MD5.live || 'md5';
+    if (!f || typeof f !== 'object' || !(k in f)) return null;
+    return typeof f[k] === 'string' && /^[a-f0-9]{32}$/.test(f[k]) ? f[k] : null;
+  }
+  // After Publish the session's own change is the new baseline.
+  function xtRebase(paths) {
+    var b = xtBaseGet(); (paths || []).forEach(function (p) { delete b.paths[p]; });
+    try { xsSetJson('base', b); } catch (e) {}
+    return xtBaseRecord(paths);
   }
 
   // ----- page source files (v0.1.3) -----
@@ -533,7 +789,9 @@
     var used = {}; list.forEach(function (a) { used[a.name] = 1; });
     var nm = name, k = 2, dot = name.lastIndexOf('.');
     while (used[nm]) nm = name.slice(0, dot) + '-' + (k++) + name.slice(dot);
-    list.push({ id: ++XT_ATT_SEQ, file: f, name: nm, ext: ext, size: f.size, path: '', err: '' });
+    var item = { id: ++XT_ATT_SEQ, file: f, name: nm, ext: ext, size: f.size, path: '', err: '' };
+    list.push(item);
+    if (list === XT_ATT && f.size <= XT_DRAFT_ATT_MAX) xtToDataUrl(f).then(function (d) { item.dataUrl = String(d); xsDraftSoon(); }, function () {});   // v0.1.13: kept with the draft
     return '';
   }
   function xtAttAdd(list) {
@@ -560,17 +818,18 @@
       top.appendChild(el('span', { class: 'att-name', title: a.name }, a.name));
       top.appendChild(el('span', { class: 'att-size' }, xtKB(a.size)));
       var rm = el('button', { type: 'button', class: 'att-x', 'data-role': 'att-remove', 'aria-label': 'Remove ' + a.name, title: 'Remove' }, '\u2715');
-      rm.addEventListener('click', function () { XT_ATT = XT_ATT.filter(function (b) { return b.id !== a.id; }); xtAttRender(''); });
+      rm.addEventListener('click', function () { XT_ATT = XT_ATT.filter(function (b) { return b.id !== a.id; }); xtAttRender(''); xsDraftSoon(); });
       top.appendChild(rm);
       chip.appendChild(top);
       var inp = el('input', { type: 'text', class: 'att-path', 'data-role': 'att-path', 'aria-label': 'Where should ' + a.name + ' go on the site?', placeholder: 'Put it at e.g. /images/' + a.name + ' (blank: only show it to the AI)', maxlength: '300', spellcheck: 'false', autocomplete: 'off' });
       inp.value = a.path;
       var er = el('div', { class: 'att-err', 'data-role': 'att-err' }, a.err || '');
-      inp.addEventListener('input', function () { a.path = inp.value; var r = xtAttPath(a.path, a.name); a.err = r.err || ''; er.textContent = a.err; });
+      inp.addEventListener('input', function () { a.path = inp.value; var r = xtAttPath(a.path, a.name); a.err = r.err || ''; er.textContent = a.err; xsDraftSoon(); });
       chip.appendChild(inp); chip.appendChild(er);
       box.appendChild(chip);
     });
     if (ui.attMsg) ui.attMsg.textContent = msg || '';
+    xsDraftSoon();
     if (ui.attHint) ui.attHint.textContent = XT_ATT.length ? XT_ATT.length + ' attached. They go to the AI with your screenshot. A file with a path can be added to the site from the AI\u2019s reply, as a preview first.' : 'Add your own images, HTML, CSS, JS, JSON, SVG, PDF or text files (up to ' + XT_LIM.files + ' files, ' + Math.round(XT_LIM.file / 1024 / 1024) + ' MB each, ' + Math.round(XT_LIM.total / 1024 / 1024) + ' MB in all). Or drop them here.';
   }
   function xtHasFiles(e) { var t = e && e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0; }
@@ -775,7 +1034,9 @@
     });
     XT.feedStop.addEventListener('click', function () { xtPost('dw-ext-control', { action: 'stop' }); xtFeedStopped(); });
     XT.feedClose.addEventListener('click', function () { xtFeedClose(); });
-    [XT.feedDot, XT.feedTitle, XT.feedSpin, XT.feedMute, XT.feedPause, XT.feedStop, XT.feedClose].forEach(function (n) { hd.appendChild(n); });
+    var feedNew = el('button', { type: 'button', 'data-act': 'new-session', title: 'Start over: a new note and a new AI chat' }, 'New session');
+    feedNew.addEventListener('click', function () { xsNewSession(); });
+    [XT.feedDot, XT.feedTitle, XT.feedSpin, XT.feedMute, feedNew, XT.feedPause, XT.feedStop, XT.feedClose].forEach(function (n) { hd.appendChild(n); });
     XT.feedScroll = el('div', { class: 'scroll', 'data-role': 'feed-scroll', role: 'log', 'aria-live': 'polite' });
     XT.feedFoot = el('div', { class: 'foot', 'data-role': 'feed-foot' });
     XT.feedFoot.style.display = 'none';
@@ -1032,6 +1293,7 @@
     if (XT.feedReply) XT.feedReply.classList.remove('live');
     if (XT.feedSpin) XT.feedSpin.classList.add('off');
     if (d && d.text) xtFeedChunk(d.text, d.files);
+    if (XT.feedPersistT) { clearTimeout(XT.feedPersistT); XT.feedPersistT = null; }   // a late streaming save must not overwrite the finished record
     if (XT.feedReply) XT.feedReply.classList.remove('live');
     if (XT.feed) {
       XT.feed.setAttribute('data-state', (d && d.status === 'stopped') ? 'stopped' : 'done');
@@ -1378,22 +1640,21 @@
   function xtKB(n) { return n < 1024 ? n + ' B' : (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB'; }
   function xtFail(err) { xtCard('That did not work: ' + (err && err.message ? err.message : err) + '. Nothing else changed.', []); }
   // What is staged in this tab (survives the reload that shows the preview): {exp: ms, items: [{id, path, isNew}]}.
+  // v0.1.13: kept in the editor session (every page of the site), not per page in this tab.
   var XT_STAGED_KEY = 'dw_ext_staged';
   var XT_TTL = 10 * 60 * 1000;
-  function xtStagedStoreKey() { return XT_STAGED_KEY + ':' + xtPagePath(); }
   function xtStagedGet() {
     try {
-      var raw = sessionStorage.getItem(xtStagedStoreKey()) || sessionStorage.getItem(XT_STAGED_KEY);
-      var v = JSON.parse(raw || 'null');
+      var v = xsGetJson('staged');
+      if (!v) {                                                                  // pick up a pre-v0.1.13 per-tab record once
+        var old = sessionStorage.getItem(XT_STAGED_KEY + ':' + xtPagePath()) || sessionStorage.getItem(XT_STAGED_KEY);
+        if (old) { v = JSON.parse(old); sessionStorage.removeItem(XT_STAGED_KEY + ':' + xtPagePath()); sessionStorage.removeItem(XT_STAGED_KEY); if (v && v.items) try { xsSetJson('staged', v); } catch (e2) {} }
+      }
       return v && Array.isArray(v.items) && v.items.length && v.exp > Date.now() ? v : null;
     } catch (e) { return null; }
   }
   function xtStagedSet(v) {
-    try {
-      if (v && v.items.length) sessionStorage.setItem(xtStagedStoreKey(), JSON.stringify(v));
-      else sessionStorage.removeItem(xtStagedStoreKey());
-      sessionStorage.removeItem(XT_STAGED_KEY); // migrate off the pre-v0.1.11 tab-global key
-    } catch (e) {}
+    try { if (v && v.items.length) xsSetJson('staged', v); else xsDel('staged'); } catch (e) {}
   }
   function xtLeft(ms) { var s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
   function xtTick(stopAt) {
@@ -1401,13 +1662,15 @@
     function paint() {
       var el2 = XT.root && XT.root.querySelector('[data-role=dw-ext-countdown]'); if (!el2) { clearInterval(XT.cdTimer); XT.cdTimer = null; return; }
       var left = stopAt - Date.now();
-      if (left <= 0) { clearInterval(XT.cdTimer); XT.cdTimer = null; xtStagedSet(null); xtCard('The preview expired (previews last 10 minutes). Nothing was published; the live site is unchanged.', [{ act: 'reload', label: 'Reload page', fn: function () { location.reload(); } }]); return; }
+      if (left <= 0) { clearInterval(XT.cdTimer); XT.cdTimer = null; xtStagedSet(null); xtCard('The preview expired (a preview lasts 10 minutes unless you add time). Nothing was published; the live site is unchanged.', [{ act: 'reload', label: 'Reload page', fn: function () { location.reload(); } }]); return; }
       el2.textContent = 'Preview expires in ' + xtLeft(left) + ' unless you publish it.';
     }
     paint(); XT.cdTimer = setInterval(paint, 1000);
   }
+  function xtHandledKey(jobId, text) { return jobId ? 'j:' + jobId : 't:' + String(text || '').length; }
   function xtDone(d, quiet) {
     if (d.status !== 'complete') { return; }
+    if (typeof xtFeedPersist === 'function') { XT.feedRec = XT.feedRec || {}; XT.feedRec.handled = xtHandledKey(d.jobId || XT.feedRec.jobId || XT.job, d.text); try { xtFeedRecordSet(XT.feedRec); } catch (e) {} }
     var sent = XT.sent || [{ path: xtPagePath(), name: xtBase(xtPagePath()), base: xtBase(xtPagePath()), kind: 'html', page: true, text: null }];
     var ups = xtUpdatesFrom(d, sent), have = {};
     ups.forEach(function (u) { have[u.file.path] = 1; });
@@ -1556,6 +1819,7 @@
       var prev = xtStagedGet(), items = prev ? prev.items.slice() : [];
       ok.forEach(function (r) {
         var it = { id: String(r.res.id), path: r.item.file.path, isNew: r.res.staged_on_existing === false, mine: !!r.item.file.attach };
+        var sm = xtServerMd5(r.res); if (sm && !it.isNew) { it.srvMd5 = sm; XT_MD5.server = true; }
         items = items.filter(function (x) { return x.id !== it.id; }); items.push(it);
       });
       var st = ok.length ? { exp: Date.now() + XT_TTL - 5000, items: items } : prev;   // every new staged upload restarts its own 10 minutes
@@ -1572,8 +1836,24 @@
       }
       xtStagedSet(st);
       xtStagedCard(st, bad.length ? 'Not uploaded: ' + bad.map(function (r) { return r.item.file.path + ' (' + r.err + ')'; }).join(', ') + '.' : '', false);
+      if (st) xtArmExpect(st);
       if (!quiet) xtChime(ok.length && !(st && st.missing && st.missing.length) ? 'ok' : 'error');   // the reply is in and its files are staged
     }, function (err) { xtFail(err); if (!quiet) xtChime('error'); });
+  }
+  // v0.1.13: for files the server fingerprinted, check the live file is still what this session started from; if so its
+  // server md5 becomes the expect_md5 sent with Publish, if not the card shows the change now.
+  function xtArmExpect(st) {
+    var fresh = st.items.filter(function (it) { return it.srvMd5 && !it.expect && !it.isNew; });
+    if (!fresh.length) return Promise.resolve();
+    return xtBaseRecord(fresh.map(function (it) { return it.path; })).then(function () { return xtGuardCheck(fresh); }).then(function (changed) {
+      var cur = xtStagedGet(); if (!cur) return;
+      cur.items.forEach(function (it) {
+        var f = fresh.filter(function (x) { return x.id === it.id; })[0]; if (!f) return;
+        if (changed.indexOf(it.path) < 0) it.expect = f.srvMd5;
+      });
+      if (changed.length) { cur.conflict = (cur.conflict || []).concat(changed.filter(function (p) { return (cur.conflict || []).indexOf(p) < 0; })); xtStagedSet(cur); xtStagedCard(cur, '', false); return; }
+      xtStagedSet(cur);
+    });
   }
   // Publish / Discard controls for whatever is staged in this tab.
   function xtStagedCard(st, extra, reloaded) {
@@ -1591,32 +1871,87 @@
     if (missing.length) msg = 'Publish is blocked: the new version links to ' + (missing.length === 1 ? 'a file that is' : missing.length + ' files that are') + ' not on the site and ' + (missing.length === 1 ? 'was' : 'were') + ' not sent back by ' + xtAiName(XT.ai) + ' (marked MISSING below). Ask ' + xtAiName(XT.ai) + ' for ' + (missing.length === 1 ? 'it' : 'them') + ' in the follow-up box, or attach the file, then press Check again. ' + msg;
     if (Array.isArray(st.oldMissing) && st.oldMissing.length) msg += ' Already broken before this edit (not blocking): ' + st.oldMissing.join(', ') + '.';
     if (Array.isArray(st.unplaced) && st.unplaced.length) msg += ' ' + xtAiName(XT.ai) + ' made ' + st.unplaced.join(', ') + ' but it was not used (its name is not linked anywhere, or it could not be read).';
+    var conflict = Array.isArray(st.conflict) ? st.conflict : [];
+    conflict.forEach(function (p) { items.push({ text: 'CHANGED ON THE LIVE SITE: ' + p, path: p, cls: 'miss' }); });
+    if (conflict.length) msg = (conflict.length === 1 ? conflict[0] + ' changed' : conflict.length + ' files changed') + ' on the live site since you opened it (marked below), by someone else or another tab. Publishing now would replace those changes. Reload to see the live version, or press Overwrite anyway. ' + msg;
     var check = { act: 'recheck', label: 'Check again', fn: function (b) {
       b.disabled = true; b.textContent = 'Checking\u2026';
       xtCheckPaths(missing).then(function (still) { var cur = xtStagedGet() || st; cur.missing = still; xtStagedSet(cur); xtStagedCard(cur, still.length ? '' : 'All linked files are there now.', reloaded); });
     } };
     xtCard(msg, [
       missing.length ? { act: 'publish', label: 'Publish blocked', cls: 'blocked', fn: function () {} } :
-      { act: 'publish', label: n === 1 ? 'Publish' : 'Publish ' + n + ' files', cls: 'go', fn: function (b) {
-        var now = xtStagedGet(); if (now && now.missing && now.missing.length) return;
-        if (!window.confirm('Publish ' + (n === 1 ? 'this staged file' : 'these ' + n + ' staged files') + ' to the live site? The current versions are kept in /files history.')) return;
-        b.disabled = true; b.textContent = 'Publishing\u2026';
-        xtEach(st.items, function (it) { return xtCall({ action: 'publish_staging', id: it.id }); }).then(xtPublished, xtFail);
+      { act: 'publish', label: conflict.length ? 'Overwrite anyway' : (n === 1 ? 'Publish' : 'Publish ' + n + ' files'), cls: conflict.length ? '' : 'go', fn: function (b) {
+        var now = xtStagedGet() || st; if (now.missing && now.missing.length) return;
+        var label = b.textContent;
+        function go(force) { b.disabled = true; b.textContent = 'Publishing\u2026'; xtEach(now.items, function (it) { return xtCall(xtPublishBody(it, force)); }).then(xtPublished, xtFail); }
+        if (now.conflict && now.conflict.length) {
+          if (!window.confirm('Overwrite anyway? ' + now.conflict.join(', ') + ' changed on the live site since you opened it; publishing replaces those changes. The current versions are kept in /files history.')) return;
+          xtLog('publish_anyway', { files: now.conflict.length }); go(true); return;
+        }
+        b.disabled = true; b.textContent = 'Checking for changes\u2026';
+        xtGuardCheck(now.items.filter(function (it) { return !it.expect; })).then(function (changed) {   // files with expect_md5 are checked by the server
+          if (changed.length) { now.conflict = changed; xtStagedSet(now); xtStagedCard(now, '', reloaded); if (XT.box) XT.box.setAttribute('data-conflict', '1'); xtChime('error'); return; }
+          b.disabled = false; b.textContent = label;
+          if (!window.confirm('Publish ' + (n === 1 ? 'this staged file' : 'these ' + n + ' staged files') + ' to the live site? The current versions are kept in /files history.')) return;
+          go(false);
+        });
       } },
+      { act: 'extend', label: 'Add 10 min', fn: function (b) { xtExtend(b, reloaded); } },
       { act: 'discard', label: 'Discard', fn: function (b) {
         b.disabled = true; b.textContent = 'Discarding\u2026';
         xtEach(st.items, function (it) { return xtCall({ action: 'discard_staging', id: it.id }); }).then(xtDiscarded, xtFail);
       } },
       { act: 'reload', label: reloaded ? 'Reload preview' : (here ? 'Show preview (reload)' : 'Reload page'), fn: function () { location.reload(); } }
     ].concat(missing.length ? [check] : []), null, items, 'staged');
+    if (conflict.length && XT.box) XT.box.setAttribute('data-conflict', '1');
     if (missing.length && XT.box) { XT.box.setAttribute('data-blocked', '1'); var pb = XT.box.querySelector('[data-act=publish]'); if (pb) { pb.disabled = true; pb.setAttribute('aria-disabled', 'true'); pb.title = 'Blocked: some linked files are missing'; } }
     xtTick(st.exp);
   }
+  // v0.1.13: "Add 10 min" keeps every staged file of this session 10 minutes longer (the server caps a preview at
+  // 60 minutes left). Press it as often as needed; the countdown follows the soonest file.
+  function xtExtend(b, reloaded) {
+    var st = xtStagedGet(); if (!st || !st.items.length) return;
+    b.disabled = true; b.textContent = 'Adding\u2026';
+    xtEach(st.items, function (it) { return xtCall({ action: 'extend_staging', id: it.id }); }).then(function (rs) {
+      var cur = xtStagedGet() || st, left = [], capped = false, gone = [], bad = [];
+      rs.forEach(function (r) {
+        if (r.ok && r.res && typeof r.res.expires_in_seconds === 'number') { left.push(r.res.expires_in_seconds); if (r.res.capped) capped = true; }
+        else if (r.status === 409) gone.push(r.item.id);
+        else bad.push(r.item.path + ' (' + r.err + ')');
+      });
+      cur.items = cur.items.filter(function (it) { return gone.indexOf(it.id) < 0; });
+      if (left.length) cur.exp = Date.now() + Math.min.apply(null, left) * 1000 - 2000;
+      xtStagedSet(cur);
+      xtLog('extend', { files: rs.length, ok: left.length, gone: gone.length, capped: capped });
+      var note = left.length ? (capped ? 'Preview kept for the most allowed (' + XT_EXTEND_CAP + ' minutes from now).' : 'Added 10 minutes.') : '';
+      if (gone.length) note += ' ' + gone.length + (gone.length === 1 ? ' file had' : ' files had') + ' already expired.';
+      if (bad.length) note += ' Could not extend: ' + bad.join(', ') + '.';
+      if (!cur.items.length) { xtStagedSet(null); xtCard('The preview expired before it could be extended. Nothing was published; the live site is unchanged.', [{ act: 'reload', label: 'Reload page', fn: function () { location.reload(); } }]); return; }
+      xtStagedCard(cur, note.trim(), reloaded);
+    }, xtFail);
+  }
+  var XT_EXTEND_CAP = 60;
   function xtPublished(rs) {
     var ok = rs.filter(function (r) { return r.ok; }), bad = rs.filter(function (r) { return !r.ok; });
+    if (ok.length) xtRebase(ok.map(function (r) { return r.item.path; }));
+    var mism = bad.filter(function (r) { return r.err === 'md5_mismatch'; });
+    if (mism.length) {
+      // v0.1.13: the server refused (the live file changed since you opened it); nothing was written for those files.
+      var cur = xtStagedGet();
+      if (cur) {
+        cur.items = cur.items.filter(function (it) { return !ok.some(function (r) { return r.item.id === it.id; }); });
+        cur.conflict = mism.map(function (r) { return r.item.path; });
+        xtStagedSet(cur);
+        xtLog('md5_mismatch', { files: mism.length, published: ok.length });
+        xtStagedCard(cur, ok.length ? 'Published ' + ok.length + ' of ' + rs.length + '.' : '', false);
+        if (XT.box) XT.box.setAttribute('data-conflict', '1');
+        xtChime('error');
+        return;
+      }
+    }
     var st = xtStagedGet(); if (st) { st.items = st.items.filter(function (it) { return !ok.some(function (r) { return r.item.id === it.id; }) && !bad.some(function (r) { return r.item.id === it.id && r.status === 409; }); }); xtStagedSet(st); }
     var msg = 'Published ' + ok.length + ' of ' + rs.length + '. Visitors see the new version now; the previous version is kept in /files history.'
-      + (bad.length ? ' Not published: ' + bad.map(function (r) { return r.item.path + ' (' + (r.status === 409 ? 'the preview expired' : r.err) + ')'; }).join(', ') + '.' : '');
+      + (bad.length ? ' Not published: ' + bad.map(function (r) { return r.item.path + ' (' + (/md5|changed|conflict/i.test(r.err || '') ? 'it changed on the live site since this session started; nothing was overwritten' : r.status === 409 ? 'the preview expired' : r.err) + ')'; }).join(', ') + '.' : '');
     xtCard(msg, [{ act: 'reload', label: 'Reload page', fn: function () { location.reload(); } }], null, ok.map(function (r) { return { text: r.item.path, path: r.item.path }; }), 'published');
   }
   function xtDiscarded(rs) {
@@ -1640,7 +1975,12 @@
   fetch(q('?a=status'), { credentials: 'same-origin', cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) {
-      if (j && j.ok && j.show && j.csrf) { hint(true); csrf = j.csrf; XT.app = j.app === true; mountButton(); xtRestoreStaged(); xtRestoreFeed(); xtAskReplay(); }
+      if (j && j.ok && j.show && j.csrf) {
+        hint(true); csrf = j.csrf; XT.app = j.app === true;
+        if (j.md5 && typeof j.md5 === 'object') { XT_MD5.server = true; ['live', 'staged', 'expect'].forEach(function (k) { if (typeof j.md5[k] === 'string' && /^[a-z_]{1,40}$/.test(j.md5[k])) XT_MD5[k] = j.md5[k]; }); }
+        mountButton(); xtRestoreStaged(); xtRestoreFeed(); xtAskReplay();
+        var dr = xsDraftGet(); if (dr && dr.open && !active) setTimeout(function () { if (!active) start(); }, 0);   // v0.1.13: the editor was open before the refresh
+      }
       else if (j && j.ok) { hint(false); }
       if (j && j.ok && !j.show && location.hash === '#suggest-edit') {
         location.href = q('?a=signin') + '&return=' + encodeURIComponent(location.pathname + location.search + '#suggest-edit');
@@ -1674,6 +2014,8 @@
     '.att{margin:8px 0 0;font-size:12px;color:#33433a}',
     '.att-btn{border:1px dashed #8aa38f;background:#f4f8f3;color:#1f4d2b;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;width:100%}.att-btn:hover{background:#e8f0e6}',
     '.notebox.drag{outline:3px dashed #1f4d2b;outline-offset:2px;background:#f2f8f1}',
+    '.newsess{display:block;margin:8px 0 0 auto;border:0;background:transparent;color:#5b6b5e;font-size:11px;text-decoration:underline;cursor:pointer;padding:2px 0}',
+    '.linkbtn{border:0;background:transparent;color:#1f4d2b;font-weight:600;font-size:11px;text-decoration:underline;cursor:pointer;padding:0}',
     '.att-hint{margin:5px 0 0;font-size:11px;line-height:1.35;color:#4a5a4d}',
     '.att-msg{margin:4px 0 0;font-size:11px;color:#b3261e}.att-msg:empty{display:none}',
     '.att-list{display:flex;flex-direction:column;gap:6px;margin-top:6px;max-height:190px;overflow:auto}.att-list:empty{display:none}',
@@ -1758,11 +2100,12 @@
       ui.note = el('div', { class: 'notebox' });
       ui.note.appendChild(el('label', { for: 'dw-mk-note' }, 'What should change?'));
       ui.text = el('textarea', { id: 'dw-mk-note', maxlength: '5000', placeholder: 'e.g. Change this headline to "Family owned since 1998"' });
+      ui.text.addEventListener('input', xsDraftSoon);
       ui.note.appendChild(ui.text);
       ui.filesOpt = el('label', { class: 'files-opt', 'data-role': 'include-files-opt', title: 'Send this page\u2019s HTML, its CSS and JS files and the marked images to the AI with the screenshot' });
       ui.filesChk = el('input', { type: 'checkbox', id: 'dw-mk-files', 'data-role': 'include-files' });
       ui.filesChk.checked = xtFilesOn();
-      ui.filesChk.addEventListener('change', function () { try { localStorage.setItem(XT_FILES_KEY, ui.filesChk.checked ? '1' : '0'); } catch (e) {} });
+      ui.filesChk.addEventListener('change', function () { try { localStorage.setItem(XT_FILES_KEY, ui.filesChk.checked ? '1' : '0'); } catch (e) {} xsDraftSoon(); });
       ui.filesOpt.appendChild(ui.filesChk);
       ui.filesOpt.appendChild(el('span', null, 'Include page files (HTML, CSS, JS, images)'));
       ui.filesOpt.style.display = 'none';
@@ -1772,7 +2115,7 @@
       ui.aiSel = el('select', { 'data-role': 'ai-provider', 'aria-label': 'AI' });
       Object.keys(XT_AI).forEach(function (k) { ui.aiSel.appendChild(el('option', { value: k }, XT_AI[k])); });
       ui.aiSel.value = xtAiPref();
-      ui.aiSel.addEventListener('change', function () { try { localStorage.setItem(XT_AI_KEY, ui.aiSel.value); } catch (e) {} XT.ai = ui.aiSel.value; xtPost('dw-ext-provider', { provider: ui.aiSel.value }); });
+      ui.aiSel.addEventListener('change', function () { try { localStorage.setItem(XT_AI_KEY, ui.aiSel.value); } catch (e) {} XT.ai = ui.aiSel.value; xtPost('dw-ext-provider', { provider: ui.aiSel.value }); xsDraftSoon(); });
       ui.aiOpt.appendChild(ui.aiSel);
       ui.aiOpt.style.display = 'none';
       ui.note.appendChild(ui.aiOpt);
@@ -1788,7 +2131,11 @@
       [ui.attBtn, ui.attInput, ui.attHint, ui.attMsg, ui.attList].forEach(function (n) { ui.attOpt.appendChild(n); });
       ui.attOpt.style.display = 'none';
       ui.note.appendChild(ui.attOpt);
-      xtAttRender('');
+      var restoredMsg = xsDraftRestore();                                       // v0.1.13: pick up where you left off
+      xtAttRender(restoredMsg);
+      var ns = el('button', { type: 'button', class: 'newsess', 'data-act': 'new-session', title: 'Clear this note, markup, attached files and AI chat, and start over' }, 'New session');
+      ns.addEventListener('click', function () { xsNewSession(); });
+      ui.note.appendChild(ns);
       add(ui.note);
       ui.extStatus = null;
       if (XT.last || XT.missing) xtPaintStatus();
@@ -1796,7 +2143,7 @@
       ui.hint = add(el('div', { class: 'hint' }, ('ontouchstart' in window || navigator.maxTouchPoints > 0)
         ? 'Scroll with two fingers, or pick \u270B Scroll.' : 'Scroll with the mouse wheel or trackpad, or pick \u270B Scroll.'));
       setTimeout(function () { if (ui.hint && ui.hint.parentNode) ui.hint.parentNode.removeChild(ui.hint); }, 6000);
-      setTool('pen');
+      setTool(tool && TOOLS.some(function (t) { return t[0] === tool; }) ? tool : 'pen');
       on(window, 'dragover', xtDragOver);
       on(window, 'dragleave', xtDragLeave);
       on(window, 'drop', xtDrop);
@@ -1810,6 +2157,9 @@
       // the canvas is touch-action:none, so stop the browser's own touch gestures there; two fingers scroll via down/move
       on(cv, 'touchmove', prevent, { passive: false });
       redraw();
+      xsDraftSave(true);
+      // reopening after Close: bring back the chat panel too
+      if (!XT.feedHost) xtRestoreFeed();
     } catch (err) {
       stop();
       toast('Could not start markup: ' + (err && err.message ? err.message : err), 6000);
@@ -1832,6 +2182,8 @@
 
   // Leave edit mode completely: drop every node and listener we added and bring the button back.
   function stop() {
+    if (active) { if (XS.sent) xsDel('draft'); else xsDraftSave(false); }       // v0.1.13: Close keeps the draft for next time
+    XS.sent = false;
     active = false;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     offs.forEach(function (f) { try { f(); } catch (e) {} });
@@ -1962,6 +2314,7 @@
   }
 
   function redraw() {
+    xsDraftSoon();
     if (!ctx) return;
     ctx.clearRect(0, 0, cv.width, cv.height);
     var ox = window.scrollX, oy = window.scrollY;
@@ -2114,6 +2467,7 @@
       if (j && j.ok) {
         window.__dwMarkupLast = j.id;
         xtSubmit(j, lastBlob, sels, (r.full ? 'full page ' : 'part ') + r.w + 'x' + r.h, vw + 'x' + vh);
+        XS.sent = true;
         stop();
         if (XT.active) toast('Edit request sent. The ' + xtAiName(XT.ai || xtAiPref()) + ' reply will appear in the panel.');
         else toast('Edit request saved. The AI relay is not running on this page: reload it, then Send again.', 8000);

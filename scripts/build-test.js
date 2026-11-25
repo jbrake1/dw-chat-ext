@@ -16,11 +16,13 @@ const m = rj('manifest.json');
 m.host_permissions.push('http://localhost/*', 'http://127.0.0.1/*');
 m.content_scripts[0].matches.push('http://localhost/*');
 m.content_scripts[1].matches.push('http://127.0.0.1/*', 'http://127.0.0.2/*');
-m.host_permissions.push('http://127.0.0.2/*');
+m.host_permissions.push('http://127.0.0.2/*', 'http://127.0.0.3/*', 'http://127.0.0.4/*');
+m.content_scripts[1].matches.push('http://127.0.0.3/*', 'http://127.0.0.4/*');   // v0.1.13: mock Grok, mock Claude
+if (m.content_scripts[2]) m.content_scripts[2].matches.push('http://127.0.0.3/*', 'http://127.0.0.4/*');
 m.name += ' (TEST BUILD)';
 wj('manifest.json', m);
 const c = rj('config.json');
-c.allowDevOverride = true; c.dwHosts.push('localhost'); c.aiSites['127.0.0.1'] = 'chatgpt'; c.aiSites['127.0.0.2'] = 'gemini';
+c.allowDevOverride = true; c.dwHosts.push('localhost'); c.aiSites['127.0.0.1'] = 'chatgpt'; c.aiSites['127.0.0.2'] = 'gemini'; c.aiSites['127.0.0.3'] = 'grok'; c.aiSites['127.0.0.4'] = 'claude';
 wj('config.json', c);
 const i = rj('instructions/chatgpt.json');
 i.match.hosts.push('127.0.0.1'); if (!process.env.DW_LIVE) i.stream.startTimeoutMs = 8000; // live runs keep the production timeout (a real site can take longer than 8 s to start)
@@ -28,4 +30,7 @@ wj('instructions/chatgpt.json', i);
 const g = rj('instructions/gemini.json'); // v0.1.6: mock Gemini on 127.0.0.2
 g.match.hosts.push('127.0.0.2'); if (!process.env.DW_LIVE) g.stream.startTimeoutMs = 8000;
 wj('instructions/gemini.json', g);
+for (const [site, ip] of [['grok', '127.0.0.3'], ['claude', '127.0.0.4']]) {   // v0.1.13
+  const x = rj('instructions/' + site + '.json'); x.match.hosts.push(ip); if (!process.env.DW_LIVE) x.stream.startTimeoutMs = 8000; wj('instructions/' + site + '.json', x);
+}
 console.log('test build at', out);

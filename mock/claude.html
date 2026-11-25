@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock Claude</title>
+<style>body{font-family:system-ui;margin:0;display:flex}nav{width:160px;border-right:1px solid #ccc;padding:8px}main{flex:1;padding:16px}.ProseMirror{min-height:40px;border:1px solid #888;padding:4px}</style></head>
+<body>
+<!-- Mock of claude.ai (best-effort mimic of its public web DOM, NOT verified live: claude.ai answers 403 without a session).
+     New chat link /new, ProseMirror prompt in a fieldset, hidden input[data-testid=file-upload], Send message / Stop response buttons,
+     [data-testid=user-message] turns, assistant turns div[data-is-streaming] > .font-claude-response > .standard-markdown, code in pre, file cards. -->
+<nav>
+  <a href="/new" aria-label="New chat">New chat</a>
+  <div><a href="/projects" data-forbidden="projects">Projects</a></div>
+  <button data-forbidden="upgrade">Upgrade plan</button>
+</nav>
+<main>
+  <div id="hist"></div>
+  <fieldset>
+    <div id="previews"></div>
+    <input data-testid="file-upload" type="file" multiple hidden>
+    <div class="ProseMirror" contenteditable="true" role="textbox" aria-label="Write your prompt to Claude"><p><br></p></div>
+    <button type="button" data-testid="input-menu-plus" aria-label="Add files, connectors, and more">+</button>
+    <button type="button" data-testid="model-selector-dropdown" data-forbidden="model">Sonnet 4.5</button>
+    <button type="button" aria-label="Send message">↑</button>
+    <button type="button" aria-label="Stop response" hidden>■</button>
+  </fieldset>
+</main>
+<script>
+window.MOCK = {
+  name: 'Claude', homePath: '/new', convoPath: function (id) { return '/chat/' + id; }, signInHref: '/login',
+  prompt: 'div.ProseMirror[contenteditable=true]', send: 'button[aria-label="Send message"]', stop: 'button[aria-label="Stop response"]',
+  fileInput: 'input[data-testid=file-upload]', previews: '#previews', hist: '#hist', newChat: 'a[href="/new"]',
+  preview: function () { return '<div data-testid="file-thumbnail"><span class="name"></span><button type="button" aria-label="Remove">x</button></div>'; },
+  user: function (t) { var d = document.createElement('div'); d.setAttribute('data-testid', 'user-message'); d.innerHTML = '<p class="whitespace-pre-wrap"></p>'; d.firstChild.textContent = t; return d; },
+  assistant: function () {
+    var d = document.createElement('div'); d.setAttribute('data-is-streaming', 'true');
+    d.innerHTML = '<div class="font-claude-response"><div class="standard-markdown"></div></div>';
+    return { el: d, md: d.querySelector('.standard-markdown'), chipHost: d.querySelector('.font-claude-response'), done: function () { d.setAttribute('data-is-streaming', 'false'); var a = document.createElement('div'); a.setAttribute('data-testid', 'action-bar-copy'); a.innerHTML = '<button aria-label="Copy">c</button><button aria-label="Retry">r</button>'; d.appendChild(a); } };
+  },
+  codeBlock: function (lang, body) {
+    var w = document.createElement('div'); w.className = 'relative';
+    w.innerHTML = '<pre><div class="hdr"><div class="lang"></div><button aria-label="Copy">Copy</button></div><div><code></code></div></pre>';
+    w.querySelector('.lang').textContent = lang; w.querySelector('code').className = 'language-' + lang; w.querySelector('code').textContent = body; return w;
+  },
+  chips: function () {
+    var b = document.createElement('div'); b.className = 'files';
+    b.innerHTML = '<div data-testid="file-card"><span class="file-name">hanalei-taro-1600.webp</span><button type="button" data-dl="1" aria-label="Download">d</button></div>' +
+      '<div data-testid="file-card"><span class="file-name">hanalei-taro-1600.jpg</span><a href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==">Open</a></div>';
+    return b;
+  }
+};
+</script>
+<script src="/aimock.js"></script>
+</body></html>

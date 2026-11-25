@@ -16,7 +16,7 @@ async function makeEnv({ extDir, headless = true, profileDir, live = false, live
   // The shipped config carries the production pass key; the mock signs no passes (scenarios that test signing set
   // their own key). Without this, every mock scenario stays inactive.
   if (!live && !dwBase) dev.passPublicKeyJwk = null;
-  if (!live) { dev.devTabMatches = { gemini: ['http://127.0.0.2/*'], chatgpt: ['http://127.0.0.1/*'] }; dev.devNewChatUrls = { gemini: mock.gemUrl + '/app?speed=15&tokens=14' }; }
+  if (!live) { dev.devTabMatches = { gemini: ['http://127.0.0.2/*'], chatgpt: ['http://127.0.0.1/*'], grok: ['http://127.0.0.3/*'], claude: ['http://127.0.0.4/*'] }; dev.devNewChatUrls = { gemini: mock.gemUrl + '/app?speed=15&tokens=14', grok: mock.grokUrl + '/?speed=15&tokens=14', claude: mock.claudeUrl + '/new?speed=15&tokens=14' }; }
   // Mock/tests fetch patterns from the mock host. A live run keeps the shipped
   // https://dwalliance.com/editor-ai/patterns/{site}.json unless an override is passed.
   if (instructionsUrl) dev.instructionsUrl = instructionsUrl;
@@ -832,5 +832,327 @@ scenarios['gemini-missing-blocks-publish'] = async (env) => {
   c.check('only_the_page_was_staged', env.mock.state.staged.filter((x) => x.action === 'create').length === 1, env.mock.state.staged);
   return c.steps;
 };
+
+// v0.1.13: "Add 10 min" on the Publish-blocked staged card: the server extends every staged file, the countdown
+// follows, repeated presses stop at the 60-minute cap, and the longer countdown survives a reload.
+scenarios['staged-extend'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(async (u) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = { gemini: u }; await chrome.storage.local.set({ dev: d }); }, env.mock.gemUrl + '/app?speed=15&tokens=14&reply=taro');
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.goto(env.dwUrl + '/editor.html');
+  env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const cardInfo = () => dw.evaluate(() => {
+    const r = document.getElementById('dw-ext-actions'); const sr = r && r.shadowRoot; const box = sr && sr.querySelector('[data-state=staged]');
+    if (!box) return null;
+    const cd = box.querySelector('[data-role=dw-ext-countdown]'); const m = /(\d+):(\d\d)/.exec(cd ? cd.textContent : '');
+    const ex = box.querySelector('[data-act=extend]');
+    return { secs: m ? (+m[1]) * 60 + (+m[2]) : -1, extend: ex ? ex.textContent : null, extendDisabled: ex ? ex.disabled : null, blocked: box.getAttribute('data-blocked') === '1', text: box.textContent.slice(0, 600) };
+  });
+  const c0 = await L.waitFor(async () => { const x = await cardInfo(); return x && x.secs > 0 ? x : null; }, 20000, 'staged card').catch((e) => ({ error: String(e) }));
+  c.check('blocked_card_has_add_10_min', !!c0 && c0.blocked === true && c0.extend === 'Add 10 min', c0);
+  c.check('countdown_starts_under_10_min', !!c0 && c0.secs > 500 && c0.secs <= 600, c0 && c0.secs);
+  const click = () => dw.evaluate(() => document.getElementById('dw-ext-actions').shadowRoot.querySelector('[data-state=staged] [data-act=extend]').click());
+  await click();
+  const c1 = await L.waitFor(async () => { const x = await cardInfo(); return x && x.secs > 1100 ? x : null; }, 10000, 'extended').catch((e) => ({ error: String(e) }));
+  c.check('countdown_plus_10_min', !!c1 && c1.secs > 1100 && c1.secs <= 1200 && /Added 10 minutes/.test(c1.text), c1 && { secs: c1.secs, text: c1.text });
+  const nStaged = env.mock.state.staged.filter((x) => x.action === 'create').length;
+  c.check('every_staged_file_extended_on_server', (env.mock.state.extended || []).length === nStaged && nStaged >= 1, { extended: env.mock.state.extended, staged: nStaged });
+  c.check('still_blocked_after_extend', !!c1 && c1.blocked === true, c1 && c1.blocked);
+  for (let i = 0; i < 6; i++) { await click(); await L.waitFor(async () => { const x = await cardInfo(); return x && x.extend === 'Add 10 min' && !x.extendDisabled ? x : null; }, 10000, 'extend again'); }
+  const c2 = await cardInfo();
+  c.check('capped_at_60_min', !!c2 && c2.secs > 3500 && c2.secs <= 3600 && /most allowed/.test(c2.text), c2 && { secs: c2.secs, text: c2.text });
+  await dw.reload();
+  const c3 = await L.waitFor(async () => { const x = await cardInfo(); return x && x.secs > 0 ? x : null; }, 20000, 'card after reload').catch((e) => ({ error: String(e) }));
+  c.check('longer_countdown_survives_reload', !!c3 && c3.secs > 3400, c3 && c3.secs);
+  return c.steps;
+};
+
+// ---------- v0.1.13: editor sessions, several editors, overwrite guard ----------
+const shadowEval = (page, fn, arg) => page.evaluate(fn, arg);
+const feedInfo = (page) => page.evaluate(() => {
+  const h = document.getElementById('dw-ext-feed'); const sr = h && h.shadowRoot; if (!sr) return null;
+  const rs = [...sr.querySelectorAll('[data-role=reply]')]; const last = rs[rs.length - 1];
+  return { replies: rs.length, done: last ? last.getAttribute('data-done') : null, text: last ? last.textContent : '', users: [...sr.querySelectorAll('[data-role=feed-user]')].map((u) => u.textContent.slice(0, 200)) };
+});
+const editorInfo = (page) => page.evaluate(() => {
+  const h = document.getElementById('dw-markup-root'); const sr = h && h.shadowRoot; if (!sr) return null;
+  const ta = sr.querySelector('textarea#dw-mk-note'); const st = sr.querySelector('[data-role=ext-status]');
+  return { open: !!ta, note: ta ? ta.value : null, chips: [...sr.querySelectorAll('[data-role=att-chip]')].map((c) => c.getAttribute('data-name')), status: st ? st.getAttribute('data-state') : null, statusText: st ? st.textContent : '' };
+});
+const sessInfo = (page) => page.evaluate(() => {
+  const sid = sessionStorage.getItem('dw_ext_sid'); const keys = [];
+  for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+  const draft = sid ? JSON.parse(localStorage.getItem('dw_ext_s:' + sid + ':draft') || 'null') : null;
+  return { sid, keys, draft: draft ? { note: draft.note, shapes: (draft.shapes || []).length, att: (draft.att || []).map((a) => ({ name: a.name, kept: !!a.dataUrl })), open: draft.open } : null };
+});
+async function openEditor(env, url) {
+  const p = await env.ctx.newPage();
+  await p.goto(url || env.dwUrl + '/editor.html');
+  await p.waitForSelector('#dw-markup-root', { state: 'attached', timeout: 15000 });
+  await L.sleep(900);
+  return p;
+}
+async function waitReply(page, re, ms) {
+  return L.waitFor(async () => { const f = await feedInfo(page); return f && f.done && (!re || re.test(f.text)) ? f : null; }, ms || 40000, 'reply').catch(async (e) => ({ error: String(e), feed: await feedInfo(page) }));
+}
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
+// Close keeps the note, markup and attached file; reopening restores them; a refresh with the editor open reopens it;
+// the chat survives a refresh; New session clears everything and the next Send starts a new AI chat.
+scenarios['session-persist'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await setNewChatUrl(env, 'grok', env.mock.grokUrl + '/?speed=15&tokens=14&code=0');
+  await env.sw.evaluate(() => self.__dw.setProvider('grok'));
+  const dw = await openEditor(env); env.dwPage = dw;
+  dw.on('dialog', (d) => d.accept());
+  await dw.locator('button.fab').click();
+  await dw.locator('textarea#dw-mk-note').fill('Keep my place TOK-A1');
+  await dw.locator('input[data-role=attach-input]').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: PNG });
+  const vp = dw.viewportSize() || { width: 1200, height: 800 };
+  await dw.mouse.move(vp.width * 0.3, vp.height * 0.3); await dw.mouse.down(); await dw.mouse.move(vp.width * 0.45, vp.height * 0.4, { steps: 8 }); await dw.mouse.up();
+  await L.sleep(900);
+  await dw.locator('button[data-act=cancel]').click();
+  const closed = await editorInfo(dw);
+  const s0 = await sessInfo(dw);
+  c.check('closed_editor_kept_draft', !!s0.draft && s0.draft.note === 'Keep my place TOK-A1' && s0.draft.shapes >= 1 && s0.draft.att.length === 1 && s0.draft.att[0].kept && s0.draft.open === false && closed && !closed.open, { closed, s0 });
+  await dw.locator('button.fab').click();
+  const re1 = await L.waitFor(async () => { const e = await editorInfo(dw); return e && e.open && e.note ? e : null; }, 5000, 'reopen').catch(() => null);
+  c.check('reopen_restores_note_and_file', !!re1 && re1.note === 'Keep my place TOK-A1' && re1.chips.join() === 'logo.png', re1);
+  await L.sleep(700);
+  await dw.reload();
+  await dw.waitForSelector('#dw-markup-root', { state: 'attached', timeout: 15000 });
+  const re2 = await L.waitFor(async () => { const e = await editorInfo(dw); return e && e.open && e.note ? e : null; }, 8000, 'auto reopen').catch(() => null);
+  const s1 = await sessInfo(dw);
+  c.check('refresh_reopens_editor_with_draft', !!re2 && re2.note === 'Keep my place TOK-A1' && re2.chips.join() === 'logo.png' && s1.sid === s0.sid && s1.draft && s1.draft.shapes >= 1, { re2, same: s1.sid === s0.sid });
+  await L.sleep(1200);
+  await dw.locator('button[data-act=send]').click();
+  const r1 = await waitReply(dw, /TOK-A1/);
+  c.check('sent_and_replied', !!r1 && r1.done === 'complete' && /TOK-A1/.test(r1.text), r1);
+  const s2 = await sessInfo(dw);
+  c.check('draft_cleared_after_send', !s2.draft, s2.draft);
+  await dw.reload();
+  await dw.waitForSelector('#dw-markup-root', { state: 'attached', timeout: 15000 });
+  const r2 = await L.waitFor(async () => { const f = await feedInfo(dw); return f && f.done ? f : null; }, 8000, 'feed restored').catch(() => null);
+  c.check('chat_survives_refresh', !!r2 && /TOK-A1/.test(r2.text) && r2.users.some((u) => /Keep my place/.test(u)), r2);
+  await dw.evaluate(() => document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-act=close]').click());
+  await dw.locator('button.fab').click();
+  const r3 = await L.waitFor(async () => { const f = await feedInfo(dw); return f && f.done ? f : null; }, 5000, 'feed back on reopen').catch(() => null);
+  c.check('chat_back_when_editor_reopens', !!r3 && /TOK-A1/.test(r3.text), r3);
+  await dw.locator('button[data-act=cancel]').click();
+  // New session
+  const before = await sessInfo(dw);
+  await dw.evaluate(() => document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-act=new-session]').click());
+  await L.waitFor(async () => (await sessInfo(dw)).sid !== before.sid, 5000, 'new sid').catch(() => null);
+  const after = await sessInfo(dw);
+  c.check('new_session_clears', after.sid !== before.sid && !after.keys.some((k) => k.indexOf('dw_ext_s:' + before.sid + ':') === 0) && !(await feedInfo(dw)), { keys: after.keys.length });
+  await sendAndWait(env, c, { note: 'Fresh start TOK-B2', timeout: 40000 });
+  const r4 = await feedInfo(dw);
+  c.check('new_session_reply', !!r4 && /TOK-B2/.test(r4.text) && !r4.users.some((u) => /Keep my place/.test(u)), r4);
+  const gp = env.ctx.pages().filter((p) => p.url().startsWith(env.mock.grokUrl));
+  const turns = gp.length ? await gp[0].evaluate(() => [...document.querySelectorAll('.user-turn, [data-role=user], .message-bubble')].map((n) => n.textContent.slice(0, 80))) : [];
+  const g = gp.length ? await gp[0].evaluate(() => ({ received: (window.__received || []).map((r) => (/TOK-\w+/.exec(r.text) || [''])[0]), lastTok: ((/TOK-\w+/.exec(((window.__received || []).slice(-1)[0] || {}).text || '') || [''])[0]), newChat: window.__newChat || 0, path: location.pathname })) : null;
+  c.check('one_grok_tab_reused', gp.length === 1, gp.map((p) => p.url()));
+  c.check('next_send_started_a_new_chat', !!g && g.newChat >= 1 && g.lastTok === 'TOK-B2', { g, turns });
+  return c.steps;
+};
+
+// Two editor tabs, two AI tabs: each reply goes back to the editor that asked; a third editor sees every AI tab taken
+// and can open its own.
+scenarios['two-editors'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await setNewChatUrl(env, 'grok', env.mock.grokUrl + '/?speed=35&tokens=40&code=0');
+  await env.sw.evaluate(() => self.__dw.setProvider('grok'));
+  const a = await openEditor(env), b = await openEditor(env);
+  const sa = await sessInfo(a), sb = await sessInfo(b);
+  c.check('each_editor_has_its_own_session', !!sa.sid && !!sb.sid && sa.sid !== sb.sid, { a: !!sa.sid, b: !!sb.sid });
+  for (const [p, n] of [[a, 'First editor TOK-ONE'], [b, 'Second editor TOK-TWO']]) { await p.bringToFront(); await p.locator('button.fab').click(); await p.locator('textarea#dw-mk-note').fill(n); await p.locator('button[data-act=send]').click(); }
+  const ra = await waitReply(a, /TOK-/, 60000), rb = await waitReply(b, /TOK-/, 60000);
+  c.check('editor_a_got_its_own_reply', !!ra && ra.done === 'complete' && /TOK-ONE/.test(ra.text) && !/TOK-TWO/.test(ra.text), ra && ra.text && ra.text.slice(0, 80));
+  c.check('editor_b_got_its_own_reply', !!rb && rb.done === 'complete' && /TOK-TWO/.test(rb.text) && !/TOK-ONE/.test(rb.text), rb && rb.text && rb.text.slice(0, 80));
+  const gtabs = env.ctx.pages().filter((p) => p.url().startsWith(env.mock.grokUrl));
+  const rec = [];
+  for (const p of gtabs) rec.push(await p.evaluate(() => (window.__received || []).map((r) => (/TOK-\w+/.exec(r.text) || [''])[0])));
+  c.check('two_ai_tabs_one_request_each', gtabs.length === 2 && rec.every((r) => r.length === 1) && rec.flat().sort().join() === 'TOK-ONE,TOK-TWO', rec);
+  const st = await env.sw.evaluate(() => { const s = self.__dw.state(); return Object.values(s.sessions).filter((x) => x.pair).map((x) => x.pair.tabId); });
+  c.check('two_sessions_two_pairs', st.length === 2 && st[0] !== st[1], st);
+  // follow-up from A stays in A's chat
+  await a.bringToFront();
+  await a.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; sr.querySelectorAll('[data-role=reply]').forEach((r) => r.setAttribute('data-e2e-before', '1')); sr.querySelector('[data-role=followup-text]').value = 'More please TOK-THREE'; });
+  await a.evaluate(() => document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-act=followup-send]').click());
+  const fa = await L.waitFor(async () => a.evaluate(() => { const r = document.getElementById('dw-ext-feed').shadowRoot.querySelector('[data-role=reply][data-done]:not([data-e2e-before])'); return r ? r.textContent : null; }), 40000, 'follow-up').catch(() => null);
+  const rec2 = [];
+  for (const p of gtabs) rec2.push(await p.evaluate(() => (window.__received || []).map((r) => (/TOK-\w+/.exec(r.text) || [''])[0])));
+  c.check('followup_went_to_a_chat_only', !!fa && /TOK-THREE/.test(fa) && rec2.some((r) => r.join() === 'TOK-ONE,TOK-THREE') && rec2.some((r) => r.join() === 'TOK-TWO'), { fa: fa && fa.slice(0, 60), rec2 });
+  const fb = await feedInfo(b);
+  c.check('b_never_saw_a_followup', !!fb && fb.replies === 1 && !/TOK-THREE/.test(fb.text), fb && fb.replies);
+  // third editor: every AI tab is taken
+  const d3 = await openEditor(env);
+  await d3.locator('button.fab').click();
+  const e3 = await L.waitFor(async () => { const e = await editorInfo(d3); return e && e.status === 'all-taken' ? e : null; }, 8000, 'all taken').catch(async () => editorInfo(d3));
+  c.check('third_editor_offered_new_ai_tab', !!e3 && e3.status === 'all-taken' && /new Grok tab/.test(e3.statusText), e3);
+  await d3.locator('button[data-act=new-ai-tab]').click();
+  const n3 = await L.waitFor(async () => { const n = env.ctx.pages().filter((p) => p.url().startsWith(env.mock.grokUrl)).length; return n === 3 ? n : null; }, 15000, 'third grok tab').catch(() => env.ctx.pages().filter((p) => p.url().startsWith(env.mock.grokUrl)).length);
+  const e4 = await L.waitFor(async () => { const e = await editorInfo(d3); return e && e.status === 'paired' ? e : null; }, 8000, 'paired').catch(async () => editorInfo(d3));
+  c.check('new_ai_tab_opened_and_paired', n3 === 3 && !!e4 && e4.status === 'paired', { n3, e4 });
+  // closing A's AI tab: A's next Send re-pairs cleanly (a new tab, or a free one)
+  const aPair = await env.sw.evaluate((sid) => { const x = self.__dw.state().sessions[sid]; return x && x.pair ? x.pair.tabId : null; }, sa.sid);
+  for (const p of env.ctx.pages()) { if (!p.url().startsWith(env.mock.grokUrl)) continue; const id = await L.tabIdFor(env.sw, p.url()).catch(() => null); if (id === aPair) await p.close(); }
+  await a.bringToFront();
+  await a.evaluate(() => { const f = document.getElementById('dw-ext-feed'); const x = f && f.shadowRoot.querySelector('[data-act=close]'); if (x) x.click(); });
+  const out = await sendAndWait(Object.assign({}, env, { dwPage: a }), c, { note: 'After close TOK-FOUR', timeout: 40000 });
+  const fa2 = await waitReply(a, /TOK-FOUR/, 40000);
+  c.check('a_repairs_after_its_ai_tab_closed', !!out && !out.error && !!fa2 && fa2.done === 'complete' && /TOK-FOUR/.test(fa2.text || ''), { out, t: fa2 && (fa2.text || '').slice(0, 60) });
+  return c.steps;
+};
+
+// Someone changes the live page after the session started: Publish is held (client md5 compare on a node without
+// /files md5), and with server md5 support the server refuses with md5_mismatch; both offer Reload / Overwrite anyway.
+for (const mode of ['client', 'server']) {
+  scenarios['overwrite-conflict-' + mode] = async (env) => {
+    const c = new L.Checks();
+    await env.login();
+    await L.mockApi(env.dwUrl, '/__set', { md5Mode: mode === 'server', editorExtra: '' });
+    await setNewChatUrl(env, 'grok', env.mock.grokUrl + '/?speed=15&tokens=14');
+    await env.sw.evaluate(() => self.__dw.setProvider('grok'));
+    const dw = await openEditor(env); env.dwPage = dw;
+    dw.on('dialog', (d) => d.accept());
+    const out = await sendAndWait(env, c, { note: 'Change the headline TOK-OW', timeout: 40000 });
+    c.check('reply_done', out.done === 'complete', out);
+    const card = () => dw.evaluate(() => { const r = document.getElementById('dw-ext-actions'); const sr = r && r.shadowRoot; const box = sr && sr.querySelector('[data-state=staged]'); if (!box) return null; const pub = box.querySelector('[data-act=publish]'); return { pub: pub ? pub.textContent : null, conflict: box.getAttribute('data-conflict') === '1', text: box.textContent.slice(0, 700), reload: !!box.querySelector('[data-act=reload]') }; });
+    const c0 = await L.waitFor(async () => { const x = await card(); return x && /^Publish/.test(x.pub || '') ? x : null; }, 20000, 'staged card').catch(() => null);
+    c.check('staged_with_publish', !!c0, c0);
+    await L.sleep(500);
+    await L.mockApi(env.dwUrl, '/__set', { editorExtra: '\n<!-- someone else edited this -->\n' });
+    await dw.evaluate(() => document.getElementById('dw-ext-actions').shadowRoot.querySelector('[data-state=staged] [data-act=publish]').click());
+    const c1 = await L.waitFor(async () => { const x = await card(); return x && x.conflict ? x : null; }, 15000, 'conflict').catch(async () => card());
+    c.check('publish_held_file_changed_since_opened', !!c1 && c1.conflict && /changed on the live site since you opened it/.test(c1.text) && c1.pub === 'Overwrite anyway' && c1.reload, c1);
+    const pubBefore = (env.mock.state.published || []).length;
+    c.check('nothing_written', pubBefore === 0, env.mock.state.published);
+    if (mode === 'server') c.check('server_refused_md5_mismatch', env.mock.state.md5Refused === 1, { refused: env.mock.state.md5Refused });
+    else c.check('client_compare_no_publish_call', !env.mock.state.staged.some((x) => x.action === 'publish_staging'), env.mock.state.staged.map((x) => x.action));
+    await dw.evaluate(() => document.getElementById('dw-ext-actions').shadowRoot.querySelector('[data-state=staged] [data-act=publish]').click());
+    const done = await L.waitFor(async () => dw.evaluate(() => { const sr = document.getElementById('dw-ext-actions').shadowRoot; return sr.querySelector('[data-state=published]') ? sr.querySelector('[data-state=published]').textContent : null; }), 15000, 'published').catch(() => null);
+    const pubs = env.mock.state.published || [];
+    c.check('overwrite_anyway_publishes_without_expect', !!done && pubs.length >= 1 && pubs.every((p) => !p.expect), { done: done && done.slice(0, 80), pubs });
+    return c.steps;
+  };
+}
+
+// v0.1.13: Grok and Claude, same flow as Gemini, against mock pages that copy their public DOM (best effort).
+const SITE_MOCK = {
+  grok: { label: 'Grok', url: (env) => env.mock.grokUrl, tabs: 'http://127.0.0.3/*', home: '/', turns: "div[id^='response-'].items-start", input: 'input[type=file]' },
+  claude: { label: 'Claude', url: (env) => env.mock.claudeUrl, tabs: 'http://127.0.0.4/*', home: '/new', turns: 'div[data-is-streaming]', input: 'input[data-testid=file-upload]' }
+};
+const setNewChatUrl = (env, site, url) => env.sw.evaluate(async ([s, u]) => { const d = (await chrome.storage.local.get('dev')).dev || {}; d.devNewChatUrls = Object.assign({}, d.devNewChatUrls, { [s]: u }); await chrome.storage.local.set({ dev: d }); }, [site, url]);
+const aiPageOf = (env, site) => env.ctx.pages().find((p) => p.url().startsWith(SITE_MOCK[site].url(env)));
+for (const site of ['grok', 'claude']) {
+  const M = SITE_MOCK[site];
+  // Opens a background tab on Send, starts a New chat, types the note, uploads the screenshot through the page's own file input,
+  // relays the streamed reply with its code blocks, never clicks a forbidden button, reuses the tab (with New chat) next time,
+  // and the Send page snapshot step works for the paired tab.
+  scenarios[site + '-autoopen'] = async (env) => {
+    const c = new L.Checks();
+    await env.login();
+    const sp = await env.sw.evaluate((s) => self.__dw.setProvider(s), site);
+    c.check('provider_set', sp.ok && sp.provider === site, sp);
+    const dw = await env.openDw();
+    await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+    c.check('no_ai_tab_yet', (await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), M.tabs)).length === 0);
+    const out = await sendAndWait(env, c, { timeout: 60000 });
+    c.check('done_detected', out.done === 'complete', out);
+    const tabs = await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), M.tabs);
+    c.check('opened_one_tab_in_background', tabs.length === 1 && tabs[0].active === false, tabs.length);
+    const st = await L.swState(env.sw);
+    c.check('paired', st.pair && st.pair.siteId === site && st.provider === site, st.pair && st.pair.siteId);
+    const steps = await L.panelSteps(dw);
+    c.check('steps_ok', ['newChat', 'prompt', 'text', 'attach', 'send', 'stream'].every((n) => steps.some((x) => x.step === n && x.ok)), steps);
+    const att = steps.find((x) => x.step === 'attach');
+    c.check('attached_through_file_input', att && /fileInput/.test(att.text || ''), att);
+    const final = await L.panelText(dw, 'reply');
+    c.check('reply_relayed', new RegExp(M.label + ' got your request').test(final || ''), final && final.slice(0, 80));
+    c.check('code_blocks_read', /```html[\s\S]*Family owned since 1998[\s\S]*```css/.test(final || '') || /Family owned since 1998/.test(final || ''), final && final.length);
+    const ap = aiPageOf(env, site);
+    const rec = ap ? await ap.evaluate(() => ({ received: window.__received, forbidden: window.__forbidden })) : null;
+    c.check('received_prompt_and_screenshot', rec && rec.received.length === 1 && /Family owned since 1998/.test(rec.received[0].text) && rec.received[0].files[0].name === 'markup.jpg', rec && rec.received[0]);
+    c.check('never_clicked_forbidden', rec && rec.forbidden.length === 0, rec && rec.forbidden);
+    const title = await dw.evaluate(() => document.getElementById('dw-ext-root').shadowRoot.querySelector('[data-role=title]').textContent);
+    c.check('panel_names_site', new RegExp(M.label).test(title), title);
+    // Send page snapshot for the paired tab: provider and host accepted, no chat text
+    const r = await env.sw.evaluate(() => self.__dw.handleSnapshot('test'));
+    const ms = (await (await env.ctx.request.get(env.dwUrl + '/__state')).json()).snapshots || [];
+    const snap = ms.find((x) => x.id === (r && r.id));
+    c.check('snapshot_uploaded', !!(r && r.ok && snap && snap.provider === site && snap.selectorCount >= 30), { r: r && { ok: r.ok, via: r.via, code: r.code }, snap });
+    // second request: same tab, New chat clicked
+    await dw.reload();
+    const out2 = await sendAndWait(env, c, { timeout: 60000 });
+    c.check('second_done', out2.done === 'complete', out2);
+    const tabs2 = await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), M.tabs);
+    c.check('reused_same_tab', tabs2.length === 1 && tabs2[0].id === tabs[0].id);
+    const rec2 = ap ? await ap.evaluate((sel) => ({ n: window.__received.length, newChat: window.__newChat, turns: document.querySelectorAll(sel).length, forbidden: window.__forbidden }), M.turns) : null;
+    c.check('new_chat_for_second_request', rec2 && rec2.n === 2 && rec2.newChat === 1 && rec2.turns === 1 && rec2.forbidden.length === 0, rec2);
+    return c.steps;
+  };
+  // Files the AI made (chips) are staged at the linked paths, Publish is on, chime plays; a follow-up stays in the same chat.
+  scenarios[site + '-chips-followup'] = async (env) => {
+    const c = new L.Checks();
+    await env.login();
+    await setNewChatUrl(env, site, M.url(env) + M.home + '?speed=15&tokens=14&reply=taro&chips=1');
+    await env.sw.evaluate((s) => self.__dw.setProvider(s), site);
+    const dw = await env.ctx.newPage(); await dw.goto(env.dwUrl + '/editor.html'); env.dwPage = dw;
+    await dw.waitForSelector('#dw-markup-root, #dw-ext-root', { state: 'attached', timeout: 15000 });
+    const out = await sendAndWait(env, c, { timeout: 60000 });
+    c.check('done_detected', out.done === 'complete', out);
+    const staged = await L.waitFor(async () => { const x = env.mock.state.staged.filter((y) => y.action === 'create'); return x.length >= 3 ? x : null; }, 30000, 'three staged').catch(() => env.mock.state.staged);
+    const by = Object.fromEntries(staged.map((x) => [x.file_name, x]));
+    c.check('webp_from_download_button_staged', !!by['hanalei-taro-1600.webp'] && by['hanalei-taro-1600.webp'].file_path === 'assets/img' && /^UklGR/.test(by['hanalei-taro-1600.webp'].data || ''), by['hanalei-taro-1600.webp']);
+    c.check('jpg_from_link_staged', !!by['hanalei-taro-1600.jpg'] && /^\/9j\//.test(by['hanalei-taro-1600.jpg'].data || ''), by['hanalei-taro-1600.jpg']);
+    const card = await L.waitFor(async () => dw.evaluate(() => {
+      const sr = (document.getElementById('dw-ext-actions') || {}).shadowRoot; const pub = sr && sr.querySelector('[data-state=staged] [data-act=publish]');
+      const f = document.getElementById('dw-ext-feed').shadowRoot.querySelector('.feed');
+      return pub ? { pub: pub.textContent, disabled: pub.disabled, missing: sr.querySelectorAll('[data-missing]').length, chime: f.getAttribute('data-chime') } : null;
+    }), 20000, 'staged card').catch((e) => ({ error: String(e) }));
+    c.check('publish_enabled_and_chime', card && !card.disabled && card.missing === 0 && card.chime === 'ok', card);
+    const ap = aiPageOf(env, site);
+    c.check('download_caught_once', ap && (await ap.evaluate(() => window.__downloads)) === 1);
+    await dw.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; sr.querySelectorAll('[data-role=reply]').forEach((r) => r.setAttribute('data-e2e-before', '1')); sr.querySelector('[data-role=followup-text]').value = 'The second image did not load'; });
+    await dw.locator('#dw-ext-feed').evaluate((h) => h.shadowRoot.querySelector('[data-act=followup-send]').click());
+    const out2 = await L.waitFor(async () => dw.evaluate(() => { const sr = document.getElementById('dw-ext-feed').shadowRoot; const r = sr.querySelector('[data-role=reply][data-done]:not([data-e2e-before])'); return r ? { done: r.getAttribute('data-done') } : null; }), 60000, 'follow-up').catch((e) => ({ error: String(e) }));
+    c.check('followup_done', out2 && out2.done === 'complete', out2);
+    const g = ap ? await ap.evaluate((sel) => ({ n: document.querySelectorAll(sel).length, newChat: window.__newChat, last: (window.__received[1] || {}).text || '' }), M.turns) : null;
+    c.check('followup_same_chat', g && g.n === 2 && g.newChat === 0 && /second image did not load/.test(g.last), g);
+    return c.steps;
+  };
+  // A usage-limit reply is reported with the site's own message, and Stop ends a long reply.
+  scenarios[site + '-limit-stop'] = async (env) => {
+    const c = new L.Checks();
+    await env.login();
+    await setNewChatUrl(env, site, M.url(env) + M.home + '?limit=1');
+    await env.sw.evaluate((s) => self.__dw.setProvider(s), site);
+    const dw = await env.openDw();
+    await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+    const out = await sendAndWait(env, c, { timeout: 60000 });
+    c.check('usage_limit_reported', (out.error && new RegExp(M.label + ' says a usage limit').test(out.error)) || out.done === 'error', out);
+    // Stop: a long reply in a fresh tab
+    for (const p of env.ctx.pages()) if (p.url().startsWith(M.url(env))) await p.close();
+    await setNewChatUrl(env, site, M.url(env) + M.home + '?speed=40&tokens=400&code=0');
+    await dw.reload();
+    await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+    await L.submitEdit(dw, 'long answer please');
+    await L.waitFor(async () => { const t = await dw.locator('[data-role=reply]').last().textContent({ timeout: 500 }).catch(() => ''); return /word1\d/.test(t); }, 40000, 'long stream started');
+    await dw.locator('button[data-act=stop]').click();
+    await L.waitFor(async () => (await dw.locator('[data-role=reply]').last().getAttribute('data-done').catch(() => null)) === 'stopped', 15000, 'stopped');
+    const ap = aiPageOf(env, site);
+    const txt = ap ? await ap.evaluate((sel) => { const t = document.querySelectorAll(sel); return t.length ? t[t.length - 1].textContent : ''; }, M.turns) : '';
+    c.check('stop_pressed_site_stop_button', !/word399/.test(txt), { chars: txt.length });
+    return c.steps;
+  };
+}
 
 module.exports.scenarios = scenarios;
