@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock Gemini</title>
+<style>body{font-family:system-ui;margin:0;display:flex}nav{width:180px;border-right:1px solid #ccc;padding:8px}main{flex:1;padding:16px}
+.ql-editor{min-height:40px;border:1px solid #888;padding:4px}.hidden{display:none}</style></head>
+<body>
+<!-- Mock of gemini.google.com (best-effort mimic of the public DOM, NOT verified against the live site):
+     side nav New chat, top bar model picker + Upgrade, input-area-v2 > uploader ("+") + rich-textarea (.ql-editor) + send-button,
+     user-query / model-response turns, message-content .markdown, code-block with a .code-block-decoration header.
+     Query: speed, tokens, fileinput=0 (menu has no file input: drop/paste only), menu=0 (no "+" input at all), limit=1,
+     signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
+<nav>
+  <side-nav-action-button data-test-id="new-chat-button"><a href="/app" aria-label="New chat"><mat-icon>edit_square</mat-icon><span>New chat</span></a></side-nav-action-button>
+  <div><a href="/library">Library</a></div>
+</nav>
+<main>
+  <top-bar-actions>
+    <button class="model-picker" aria-label="Open mode picker" data-test-id="bard-mode-menu-button"><span>Hydrogen</span><mat-icon>arrow_drop_down</mat-icon></button>
+    <button class="upgrade" aria-label="Upgrade to Google AI Ultra">Upgrade</button>
+    <a class="get-app" href="#app">Get app</a>
+  </top-bar-actions>
+  <div id="chat-history" class="chat-history"></div>
+  <input-area-v2>
+    <div class="file-preview-container" id="previews"></div>
+    <xap-uploader-dropzone id="dropzone">
+      <uploader id="uploader"><button class="upload-card-button" aria-label="Open upload file menu"><mat-icon>add</mat-icon></button></uploader>
+      <rich-textarea><div class="ql-editor ql-blank textarea" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Enter a prompt for Gemini" data-placeholder="Ask Gemini"><p><br></p></div></rich-textarea>
+    </xap-uploader-dropzone>
+    <div class="send-button-container"><button class="send-button" aria-label="Send message" aria-disabled="true" disabled=""><mat-icon>send</mat-icon></button></div>
+    <button class="speech_dictation_mic_button" aria-label="Microphone"><mat-icon>mic</mat-icon></button>
+  </input-area-v2>
+</main>
+
+</body></html>

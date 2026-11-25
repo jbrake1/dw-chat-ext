@@ -20,7 +20,14 @@
     $('pair-status').textContent = s.pair ? 'Paired with: ' + s.pair.title + (s.paused ? ' (paused)' : '') : 'No chat tab paired';
     $('pair').disabled = !(t && t.canPair) || (s.pair && t && s.pair.tabId === t.id);
     $('unpair').disabled = !s.pair;
-    $('pair-hint').textContent = t && t.canPair ? '' : 'To pair: open chatgpt.com in a tab, sign in, then click this icon there.';
+    if (Array.isArray(s.providers) && s.providers.length) {
+      var sel = $('provider');
+      if (sel.options.length !== s.providers.length) { sel.textContent = ''; s.providers.forEach(function (p) { var o = document.createElement('option'); o.value = p.id; o.textContent = p.label; sel.appendChild(o); }); }
+      sel.value = s.provider || 'chatgpt';
+    }
+    var pl = (s.providers || []).filter(function (p) { return p.id === s.provider; })[0];
+    var pname = pl ? pl.label : 'ChatGPT';
+    $('pair-hint').textContent = t && t.canPair ? '' : 'On Send, an open ' + pname + ' tab is used (or one opens in the background). To pair one now: open chatgpt.com or gemini.google.com, sign in, then click this icon there.';
     var lines = Object.keys(s.instructions).map(function (k) {
       var i = s.instructions[k];
       return k + ': ' + i.version + ' (' + i.source + ', rev ' + i.revision + ')' + (i.verified ? '' : ' [unverified]') + (i.status ? ' last check: ' + i.status.status + (i.status.code ? ' ' + i.status.code : '') : '');
@@ -43,5 +50,6 @@
     if (granted) await chrome.runtime.sendMessage({ type: 'popup:addHost', host: host });
     refresh();
   });
+  $('provider').addEventListener('change', async function () { await chrome.runtime.sendMessage({ type: 'popup:setProvider', provider: $('provider').value }); refresh(); });
   refresh();
 })();

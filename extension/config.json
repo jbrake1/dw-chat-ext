@@ -4,7 +4,8 @@
   "reportPath": "/_dw/ext/report",
   "refreshMinutes": 1440,
   "aiSites": {
-    "chatgpt.com": "chatgpt"
+    "chatgpt.com": "chatgpt",
+    "gemini.google.com": "gemini"
   },
   "dwHosts": [
     "app.dwalliance.com",

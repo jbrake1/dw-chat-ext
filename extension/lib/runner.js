@@ -25,6 +25,7 @@
     var elementMap = new Map();
     var uploads = !!job.file || (Array.isArray(job.files) && job.files.length > 0);       // nothing to blame on a limit when no file was sent
     var pageFileCount = Array.isArray(job.files) ? job.files.length : 0;
+    var guard = instr.guard || null;
     var ctl = {
       paused: false, stopRequested: false, finished: false, sent: false, seq: 0,
       observer: null, detector: null, timers: [], lastEmitAt: 0, trailing: null, pendingFinal: null,
@@ -40,8 +41,11 @@
       ctl.timers = [];
       if (ctl.trailing != null) { win.clearTimeout(ctl.trailing); ctl.trailing = null; }
     }
+    // v0.1.6: when a step fails for a generic reason, a known notice on the page (usage limit, sign-in wall) explains it better.
+    var GENERIC = { selector_not_found: 1, attach_not_confirmed: 1, attach_failed: 1, send_not_found: 1, no_stream: 1, no_reply: 1, done_timeout: 1, text_not_accepted: 1, timeout: 1 };
     function fail(step, code, extra) {
       if (ctl.finished) return;
+      if (GENERIC[code]) { try { var nc = I.readNotice(doc, instr); if (nc) code = nc; } catch (e) {} }
       var wasSent = ctl.sent;
       var partial = ctl.last;
       // A ChatGPT upload-limit notice looks like "no reply" (or a failed upload): say what really happened, once.
@@ -125,16 +129,34 @@
     (async function main() {
       try {
         var t0 = Date.now();
-        if (steps.loggedOut && I.resolve(doc, steps.loggedOut.selectors).el && !I.resolve(doc, steps.prompt.selectors).el) {
+        if (steps.loggedOut && I.resolve(doc, steps.loggedOut.selectors).el && (steps.loggedOut.strict || !I.resolve(doc, steps.prompt.selectors).el)) {
           throw I.StepError('prompt', 'not_logged_in');
+        }
+        var order = instr.flow || ['text', 'attach', 'send'];
+        // v0.1.6: start from a fresh, empty conversation (sites whose instructions list "newChat" first).
+        if (order.indexOf('newChat') !== -1 && steps.newChat) {
+          var nc = steps.newChat, home = false;
+          try { home = !!nc.homePath && new RegExp(nc.homePath).test(win.location.pathname); } catch (e) {}
+          var empty = function () { return I.countMessages(doc, instr) === 0; };
+          var how2 = 'already';
+          if (!home || !empty()) {
+            var nb = I.resolve(doc, nc.selectors);
+            if (!nb.el) how2 = 'no_button';
+            else {
+              I.safeClick(nb.el, guard, 'newChat');
+              try { await I.waitUntil(win, doc, empty, { timeoutMs: nc.timeoutMs || 8000, step: 'newChat', signal: ac.signal }); how2 = 'clicked'; }
+              catch (e) { if (e.code === 'aborted') throw e; how2 = 'not_empty'; }
+            }
+          }
+          emit({ kind: 'step', step: 'newChat', ok: how2 === 'already' || how2 === 'clicked', detail: { strategy: how2 } });
         }
         var p = await I.waitFor(win, doc, steps.prompt.selectors, { timeoutMs: steps.prompt.timeoutMs || 10000, step: 'prompt', signal: ac.signal });
         emit({ kind: 'step', step: 'prompt', ok: true, detail: { selectorIndex: p.index, ms: Date.now() - t0 } });
         var promptEl = p.el;
-        var order = instr.flow || ['text', 'attach', 'send'];
         for (var i = 0; i < order.length; i++) {
           if (ac.signal.aborted) throw I.StepError('run', 'aborted');
           var op = order[i];
+          if (op === 'newChat') continue; // done above, before the prompt box was looked up
           if (op === 'text') {
             var how = I.setText(win, promptEl, job.prompt, steps.prompt.setText, steps.prompt.clearFirst);
             emit({ kind: 'step', step: 'text', ok: true, detail: { strategy: how } });
@@ -143,13 +165,13 @@
             var list = (job.file ? [job.file] : []).concat(Array.isArray(job.files) ? job.files : []);
             if (!list.length) continue;
             var fileObjs = list.map(function (f) { return I.fileFromDataUrl(win, f); });
-            var a = await I.attachFile(win, doc, steps.attach, promptEl, fileObjs.length === 1 ? fileObjs[0] : fileObjs, ac.signal);
+            var a = await I.attachFile(win, doc, steps.attach, promptEl, fileObjs.length === 1 ? fileObjs[0] : fileObjs, ac.signal, guard);
             a.count = list.length; a.pageFiles = list.length - (job.file ? 1 : 0); a.shot = !!job.file;
             emit({ kind: 'step', step: 'attach', ok: true, detail: a });
           } else if (op === 'send') {
             ctl.baseline = I.countMessages(doc, instr);
             try { ctl.limitBefore = !!(uploads && I.detectLimit(win, doc, '', instr, job.prompt)); } catch (e) { ctl.limitBefore = false; }   // a notice left from an earlier try
-            var s = await I.clickSend(win, doc, steps.send, promptEl, ac.signal);
+            var s = await I.clickSend(win, doc, steps.send, promptEl, ac.signal, guard);
             ctl.sent = true;
             emit({ kind: 'step', step: 'send', ok: true, detail: s });
           }
@@ -176,7 +198,7 @@
       stop: function () {
         if (ctl.finished) return false;
         ctl.stopRequested = true;
-        var r = I.resolve(doc, steps.stop.selectors);
+        var r = I.resolve(doc, steps.stop.selectors, function (el) { return !I.blockedByGuard(el, guard); });
         if (r.el) { r.el.click(); emit({ kind: 'step', step: 'stop', ok: true, detail: { selectorIndex: r.index } }); evaluate(); return true; }
         if (!ctl.sent) { // nothing has gone to the chat yet: just cancel
           ac.abort(); ctl.finished = true; cleanup();

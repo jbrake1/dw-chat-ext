@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mock Gemini</title>
+<style>body{font-family:system-ui;margin:0;display:flex}nav{width:180px;border-right:1px solid #ccc;padding:8px}main{flex:1;padding:16px}
+.ql-editor{min-height:40px;border:1px solid #888;padding:4px}.hidden{display:none}</style></head>
+<body>
+<!-- Mock of gemini.google.com (best-effort mimic of the public DOM, NOT verified against the live site):
+     side nav New chat, top bar model picker + Upgrade, input-area-v2 > uploader ("+") + rich-textarea (.ql-editor) + send-button,
+     user-query / model-response turns, message-content .markdown, code-block with a .code-block-decoration header.
+     Query: speed, tokens, fileinput=0 (menu has no file input: drop/paste only), menu=0 (no "+" input at all), limit=1,
+     signedout=1, code=0 (no code blocks), convo=1 (start on an old conversation at /app/abc123). -->
+<nav>
+  <side-nav-action-button data-test-id="new-chat-button"><a href="/app" aria-label="New chat"><mat-icon>edit_square</mat-icon><span>New chat</span></a></side-nav-action-button>
+  <div><a href="/library">Library</a></div>
+</nav>
+<main>
+  <top-bar-actions>
+    <button class="model-picker" aria-label="Open mode picker" data-test-id="bard-mode-menu-button"><span>Hydrogen</span><mat-icon>arrow_drop_down</mat-icon></button>
+    <button class="upgrade" aria-label="Upgrade to Google AI Ultra">Upgrade</button>
+    <a class="get-app" href="#app">Get app</a>
+  </top-bar-actions>
+  <div id="chat-history" class="chat-history"></div>
+  <input-area-v2>
+    <div class="file-preview-container" id="previews"></div>
+    <xap-uploader-dropzone id="dropzone">
+      <uploader id="uploader"><button class="upload-card-button" aria-label="Open upload file menu"><mat-icon>add</mat-icon></button></uploader>
+      <rich-textarea><div class="ql-editor ql-blank textarea" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Enter a prompt for Gemini" data-placeholder="Ask Gemini"><p><br></p></div></rich-textarea>
+    </xap-uploader-dropzone>
+    <div class="send-button-container"><button class="send-button" aria-label="Send message" aria-disabled="true"><mat-icon>send</mat-icon></button></div>
+    <button class="speech_dictation_mic_button" aria-label="Microphone"><mat-icon>mic</mat-icon></button>
+  </input-area-v2>
+</main>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var SPEED = Number(q.get('speed') || 20), NTOK = Number(q.get('tokens') || 20);
+  var NOINPUT = q.get('fileinput') === '0', NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0';
+  window.__received = []; window.__forbidden = []; window.__menuOpened = 0; window.__newChat = 0;
+  var hist = document.getElementById('chat-history'), previews = document.getElementById('previews');
+  var prompt = document.querySelector('.ql-editor'), send = document.querySelector('.send-button'), uploader = document.getElementById('uploader');
+  var files = [], uploading = false, streaming = false, timer = null;
+
+  document.querySelector('.model-picker').addEventListener('click', function () { window.__forbidden.push('model'); });
+  document.querySelector('.upgrade').addEventListener('click', function () { window.__forbidden.push('upgrade'); });
+  document.querySelector('.get-app').addEventListener('click', function (e) { e.preventDefault(); window.__forbidden.push('getapp'); });
+  if (SIGNEDOUT) { var s = document.createElement('a'); s.href = 'https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app'; s.setAttribute('aria-label', 'Sign in'); s.textContent = 'Sign in'; document.querySelector('top-bar-actions').appendChild(s); }
+  if (q.get('convo') === '1') {
+    history.replaceState(null, '', '/app/abc123' + location.search);
+    hist.innerHTML = '<user-query><div class="query-text">old question</div></user-query><model-response><message-content class="model-response-text"><div class="markdown markdown-main-panel"><p>old answer</p></div></message-content></model-response>';
+  }
+  document.querySelector('[data-test-id=new-chat-button] a').addEventListener('click', function (e) {
+    e.preventDefault(); window.__newChat++;
+    setTimeout(function () { hist.textContent = ''; history.pushState(null, '', '/app' + location.search); }, 50);
+  });
+
+  function text() { return (prompt.textContent || '').trim(); }
+  function refresh() {
+    var off = streaming || uploading || (!text() && !files.length);
+    send.setAttribute('aria-disabled', off ? 'true' : 'false'); send.disabled = off;
+    prompt.classList.toggle('ql-blank', !text());
+  }
+  prompt.addEventListener('input', refresh);
+  prompt.addEventListener('paste', function (e) {
+    var cd = e.clipboardData; if (!cd) return;
+    if (cd.files && cd.files.length) { e.preventDefault(); addFiles(Array.prototype.slice.call(cd.files)); return; }
+    var t = cd.getData('text/plain'); if (t) { e.preventDefault(); prompt.textContent = t; prompt.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  var dz = document.getElementById('dropzone');
+  dz.addEventListener('dragover', function (e) { e.preventDefault(); });
+  dz.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) addFiles(Array.prototype.slice.call(e.dataTransfer.files)); });
+
+  // "+" menu: renders the menu items and a hidden file input inside <uploader> while open.
+  uploader.querySelector('button').addEventListener('click', function () {
+    if (NOMENU) return;
+    window.__menuOpened++;
+    if (uploader.querySelector('.menu')) return;
+    var m = document.createElement('div'); m.className = 'menu'; m.setAttribute('role', 'menu');
+    m.innerHTML = '<button role="menuitem" data-test-id="local-images-files-uploader-button">Upload files</button><button role="menuitem">Add from Drive</button><button role="menuitem">Photos</button>';
+    m.querySelector('[data-test-id]').addEventListener('click', function () { window.__forbidden.push('os-file-chooser'); });
+    if (!NOINPUT) {
+      var inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.name = 'Filedata'; inp.className = 'hidden';
+      inp.addEventListener('change', function () { addFiles(Array.prototype.slice.call(inp.files)); });
+      m.appendChild(inp);
+    }
+    uploader.appendChild(m);
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { var m = uploader.querySelector('.menu'); if (m) m.remove(); } });
+
+  function addFiles(list) {
+    uploading = true; refresh();
+    setTimeout(function () {
+      list.forEach(function (f) {
+        files.push(f);
+        var c = document.createElement('uploader-file-preview');
+        c.innerHTML = '<div class="file-preview"><span class="name"></span><button aria-label="Remove file"><mat-icon>close</mat-icon></button></div>';
+        c.querySelector('.name').textContent = f.name; previews.appendChild(c);
+      });
+      uploading = false; refresh();
+    }, 200);
+  }
+  send.addEventListener('click', doSend);
+  prompt.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } });
+
+  function doSend() {
+    if (send.disabled) return;
+    var t = text(), fs = files.slice();
+    window.__received.push({ text: t, files: fs.map(function (f) { return { name: f.name, size: f.size, type: f.type }; }) });
+    var u = document.createElement('user-query'); u.innerHTML = '<div class="query-text"></div>'; u.firstChild.textContent = t; hist.appendChild(u);
+    prompt.innerHTML = '<p><br></p>'; files = []; previews.textContent = '';
+    streaming = true; refresh();
+    send.classList.add('stop'); send.setAttribute('aria-label', 'Stop response'); send.disabled = false; send.removeAttribute('aria-disabled');
+    if (window.history) history.pushState(null, '', '/app/c' + Date.now().toString(16) + location.search);
+    var mr = document.createElement('model-response');
+    setTimeout(function () {
+      mr.innerHTML = '<model-thoughts><button>Show thinking</button></model-thoughts><div class="response-container"><message-content class="model-response-text"><div class="markdown markdown-main-panel"><p></p></div></message-content></div>';
+      hist.appendChild(mr);
+      var md = mr.querySelector('.markdown'), p = md.querySelector('p');
+      if (LIMIT) { p.textContent = 'You\u2019ve reached your limit for uploads. Your limit resets tomorrow.'; return finish(); }
+      var words = ['OK.', 'Gemini', 'got', 'your', 'request', '(' + t.length + ' chars)', 'with', fs.length + ' files' + (fs.length ? ' (first: ' + fs[0].name + ').' : '.')];
+      for (var i = words.length; i < NTOK; i++) words.push('word' + i);
+      var k = 0, out = '';
+      timer = setInterval(function () {
+        out += (k ? ' ' : '') + words[k++]; p.textContent = out;
+        if (k >= words.length) { clearInterval(timer); timer = null; if (CODE) code(md); finish(); }
+      }, SPEED);
+    }, 250);
+    function code(md2) {
+      var add = function (label, lang, body) {
+        var lp = document.createElement('p'); lp.innerHTML = 'File: <code></code>'; lp.querySelector('code').textContent = label; md2.appendChild(lp);
+        var cb = document.createElement('code-block');
+        cb.innerHTML = '<div class="code-block ng-star-inserted"><div class="code-block-decoration header-formatted gds-title-s"><span></span><div class="buttons"><button aria-label="Copy code"><mat-icon>content_copy</mat-icon></button></div></div>' +
+          '<div class="formatted-code-block-internal-container"><div class="animated-opacity"><pre><code role="text" data-test-id="code-content" class="code-container formatted"></code></pre></div></div></div>';
+        cb.querySelector('.code-block-decoration span').textContent = lang;
+        cb.querySelector('code').textContent = body; md2.appendChild(cb);
+      };
+      add('/index.html', 'HTML', '<!doctype html>\n<html><body><h1>Family owned since 1998</h1></body></html>\n');
+      add('/css/site.css', 'CSS', 'h1{color:#1f4d2b}\n');
+      var tail = document.createElement('p'); tail.textContent = 'That is all.'; md2.appendChild(tail);
+    }
+    send.onclick = function () { if (!streaming) return; if (timer) { clearInterval(timer); timer = null; } finish(); };
+    function finish() {
+      streaming = false; send.classList.remove('stop'); send.setAttribute('aria-label', 'Send message'); send.onclick = null; refresh();
+      var acts = document.createElement('message-actions'); acts.innerHTML = '<button aria-label="Good response">up</button><button aria-label="Share &amp; export">share</button><button aria-label="Copy">copy</button>';
+      mr.appendChild(acts);
+    }
+  }
+  refresh();
+})();
+</script></body></html>

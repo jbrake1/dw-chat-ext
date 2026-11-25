@@ -21,7 +21,8 @@
         paired: !!(r && r.paired),
         ai: r && r.ai,
         revision: r && r.revision,
-        editor: S.active
+        editor: S.active,
+        provider: (r && r.provider) || (S.state && S.state.provider)
       });
       toPage('dw-ext-status', st);
       return st;
@@ -99,14 +100,15 @@
       onResume: function () { send({ type: 'dw:control', action: 'resume' }); },
       onUnpair: function () { send({ type: 'dw:control', action: 'unpair' }); },
       onOpenFile: function (id) { send({ type: 'dw:control', action: 'openFile', id: id }); },
-      onToggle: function (on) { S.relay = !!on; chrome.storage.local.set({ relayEnabled: !!on }); }
+      onToggle: function (on) { S.relay = !!on; chrome.storage.local.set({ relayEnabled: !!on }); },
+      onProvider: function (id) { if (DWX.providers.valid(id)) send({ type: 'dw:setProvider', provider: id }); }
     });
     chrome.storage.local.get('relayEnabled').then(function (d) { S.relay = d.relayEnabled !== false; if (S.panel) S.panel.setRelayChecked(S.relay); });
   }
   function applyState() {
     if (S.panel) S.panel.setState(Object.assign({}, S.state, { active: S.active }));
     emitStatus();
-    if (S.active && S.pending && !S.state.paused && S.state.paired && !S.state.busy) { var j = S.pending; S.pending = null; submitJob(j); }
+    if (S.active && S.pending && !S.state.paused && !S.state.busy) { var j = S.pending; S.pending = null; submitJob(j); }
   }
 
   // ---------- submit ----------
@@ -137,20 +139,26 @@
       pf = DWX.sanitizePageFiles(d.files, d.skipped, { reserved: file ? [file.name] : [] });
     }
     var prompt = buildPrompt({ note: note, pageUrl: d.pageUrl }) + DWX.filesPrompt(pf.files, pf.skipped, file && file.name);
-    var job = { prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot };
+    // v0.1.6: the editor may name the AI (dw-ext-submit provider: 'chatgpt' | 'gemini'); anything else is ignored.
+    var provider = (via === 'native' && DWX.providers.valid(d.provider)) ? d.provider : null;
+    var job = { provider: provider, prompt: prompt.slice(0, 20000), file: file, files: pf.files.map(function (f) { return { name: f.name, path: f.path, type: f.type, dataUrl: f.dataUrl, attached: f.attached === true }; }), note: note, hadShot: !!shot };
     submitJob(job);
   }
-  function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ChatGPT when you press Resume.'); }
+  function aiName(id) { return DWX.providers.label(id || S.state.provider || DWX.providers.DEFAULT_ID); }
+  function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ' + aiName(job.provider) + ' when you press Resume.'); }
   async function submitJob(job) {
     if (S.state.paused) return queue(job);                   // nothing new is sent while paused
     if (S.panel) S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
     var p = await fetchPass();                               // fresh pass for every send
     if (!p) { if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
-    var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: { prompt: job.prompt, file: job.file, files: job.files || [] } });
-    if (r && r.ok) { S.jobId = r.jobId; return; }
+    var sj = { prompt: job.prompt, file: job.file, files: job.files || [] };
+    if (job.provider) sj.provider = job.provider;
+    var r = await send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj });
+    if (r && r.ok) { S.jobId = r.jobId; S.jobProvider = r.provider || job.provider || S.state.provider; return; }
     var code = (r && r.code) || 'unknown';
     if (code === 'paused') return queue(job);
-    var msg = { not_paired: 'Not sent: no ChatGPT tab is paired.', busy: 'Not sent: ChatGPT is still answering the previous request.', chat_tab_unreachable: 'Not sent: could not reach the ChatGPT tab.' }[code] || ('Not sent (' + code + ').');
+    var pid = (r && r.provider) || job.provider || S.state.provider;
+    var msg = (['not_paired', 'busy', 'chat_tab_unreachable', 'tab_open_failed'].indexOf(code) >= 0 && DWX.providers.message(pid, code)) || ('Not sent (' + code + ').');
     if (S.panel) S.panel.error(msg);
     if (S.wantEvents) toPage('dw-ext-error', { code: code, step: 'submit' });
   }
@@ -185,11 +193,12 @@
       if (P) P.done(e.status);
       if (S.wantEvents) toPage('dw-ext-done', { jobId: msg.jobId, status: e.status, text: e.text, files: files2(e.files), blocks: blocks2(e.blocks) });
     } else if (e.kind === 'error') {
-      var text = { not_logged_in: 'ChatGPT tab is not signed in.', no_stream: 'ChatGPT did not start answering.', done_timeout: 'ChatGPT took too long.', rate_limited: 'ChatGPT says the rate limit was hit.' }[e.code];
-      // ChatGPT's free-tier file limit: a clear message, the time ChatGPT gave (plain text only), and the page-file count
-      // so the editor can offer a text + screenshot retry. Nothing is clicked on the ChatGPT page.
+      var pidE = S.jobProvider || S.state.provider;
+      var text = DWX.providers.message(pidE, e.code);
+      // File / upload limit notice (v0.1.5): a clear message, the time the AI gave (plain text only), and the page-file
+      // count so the editor can offer a text + screenshot retry. Nothing is clicked on the chat page.
       var when = e.code === 'file_limit' ? limitWhen(e) : null;
-      if (when) text = 'ChatGPT\u2019s file limit was reached. Try again ' + when.phrase + ', or send without page files.';
+      if (when) text = DWX.providers.label(pidE) + '\u2019s file limit was reached. Try again ' + when.phrase + ', or send without page files.';
       if (P) P.error((text || ('Relay problem at step \u201c' + e.step + '\u201d: ' + e.code + '.')) + (e.sent ? '' : ' Nothing was sent.'));
       if (S.wantEvents) toPage('dw-ext-error', when ? { jobId: msg.jobId, code: e.code, step: e.step, retryAfter: when.time, retryDay: when.day, pageFiles: Math.max(0, Math.min(50, e.pageFiles | 0)) } : { jobId: msg.jobId, code: e.code, step: e.step });
     } else if (e.kind === 'status' && P) { P.note(e.state === 'paused' ? 'Paused.' : 'Resumed.'); }
@@ -212,6 +221,7 @@
         if (!S.active && candidate()) maybeActivate();
         replyStatus();
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
+      else if (d.type === 'dw-ext-provider' && S.active && DWX.providers.valid(d.provider)) send({ type: 'dw:setProvider', provider: d.provider });
       else if (d.type === 'dw-ext-control' && S.active && ['stop', 'pause', 'resume'].indexOf(d.action) >= 0) send({ type: 'dw:control', action: d.action });
     } else if (d.source === 'dw-edit-tap' && d.type === 'dw-ext-submit') onSubmitEvent(d, 'tap');
   });

@@ -1,13 +1,13 @@
 /* DW Chat Integration service worker (MV3).
  * Thin router: pairs one AI chat tab, checks the editor pass, loads/validates the site instructions, hands a job to the
  * chat tab's content script and relays its events back to the DW tab. No chat-site selectors live here. */
-importScripts('../lib/util.js', '../lib/pagefiles.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
+importScripts('../lib/util.js', '../lib/providers/registry.js', '../lib/providers/chatgpt.js', '../lib/providers/gemini.js', '../lib/pagefiles.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
 
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
 const GREEN = { 16: 'icons/green-16.png', 32: 'icons/green-32.png', 48: 'icons/green-48.png', 128: 'icons/green-128.png' };
 const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'content/chatgpt.js'];
-const DW_FILES = ['lib/util.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'content/panel.js', 'content/dw.js'];
+const DW_FILES = ['lib/util.js', 'lib/providers/registry.js', 'lib/providers/chatgpt.js', 'lib/providers/gemini.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'content/panel.js', 'content/dw.js'];
 const ses = chrome.storage.session, loc = chrome.storage.local;
 
 // ---------- static data ----------
@@ -16,8 +16,10 @@ function loadStatic() {
   if (!_static) {
     _static = (async () => {
       const get = async (p) => (await fetch(chrome.runtime.getURL(p))).json();
-      const [config, schema, chatgpt] = await Promise.all([get('config.json'), get('schema/site-instructions.schema.json'), get('instructions/chatgpt.json')]);
-      return { config, schema, bundled: { chatgpt } };
+      const provs = DWX.providers.all();
+      const [config, schema, ...instrs] = await Promise.all([get('config.json'), get('schema/site-instructions.schema.json'), ...provs.map((p) => get(p.instructions))]);
+      const bundled = {}; provs.forEach((p, i) => { bundled[p.id] = instrs[i]; });
+      return { config, schema, bundled };
     })();
   }
   return _static;
@@ -34,14 +36,15 @@ const store = {
 };
 
 // ---------- session state (survives service-worker restarts, cleared when the browser closes) ----------
-const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null };
+const S = { pair: null, tabs: {}, jobs: {}, paused: false, activeJobId: null, userUnpaired: false };
 const payloads = {}; // jobId -> {prompt, file} kept in memory only until the prompt is sent
 const iconLog = {};  // tabId -> 'green'|'grey' (debug/test visibility)
 const ready = (async () => {
-  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId']);
+  const d = await ses.get(['pair', 'tabs', 'jobs', 'paused', 'activeJobId', 'userUnpaired']);
+  S.userUnpaired = !!d.userUnpaired;
   S.pair = d.pair || null; S.tabs = d.tabs || {}; S.jobs = d.jobs || {}; S.paused = !!d.paused; S.activeJobId = d.activeJobId || null;
 })();
-const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId });
+const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId, userUnpaired: S.userUnpaired });
 
 // ---------- helpers ----------
 const reporter = new DWX.Reporter({
@@ -83,8 +86,58 @@ function publicState(tabId) {
   return {
     active: !!(t && t.validUntilMs > Date.now()),
     paired: !!S.pair, pairedTitle: S.pair ? S.pair.title : '', paused: S.paused,
-    busy: !!S.activeJobId, site: S.pair ? S.pair.siteId : null
+    busy: !!S.activeJobId, site: S.pair ? S.pair.siteId : null, provider: S.provider
   };
+}
+
+// ---------- AI provider (v0.1.6) ----------
+// The editor picks ChatGPT or Gemini (remembered in storage.local "provider"). On Send, the job goes to a tab of that
+// provider: the paired tab if it is one, else an open tab of that site (reused, same window first), else a new tab
+// opened in the background at the provider's new-chat URL. That tab becomes the paired tab.
+S.provider = DWX.providers.DEFAULT_ID;
+const providerReady = loc.get('provider').then((d) => { if (DWX.providers.valid(d.provider)) S.provider = d.provider; });
+async function setProvider(id) {
+  if (!DWX.providers.valid(id)) return { ok: false, code: 'bad_provider' };
+  S.provider = id; S.userUnpaired = false; await loc.set({ provider: id });
+  await broadcast();
+  return { ok: true, provider: id };
+}
+function waitTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(on); clearTimeout(t); resolve(ok); };
+    const on = (id, info) => { if (id === tabId && info.status === 'complete') finish(true); };
+    const t = setTimeout(() => finish(false), timeoutMs);
+    chrome.tabs.onUpdated.addListener(on);
+    chrome.tabs.get(tabId).then((tab) => { if (tab && tab.status === 'complete') finish(true); }, () => finish(false));
+  });
+}
+async function ensureProviderTab(providerId, dwTabId) {
+  const P = DWX.providers.get(providerId);
+  if (!P) return { ok: false, code: 'bad_provider' };
+  const cfg = await getConfig();
+  const hosts = Object.keys(cfg.aiSites).filter((h) => cfg.aiSites[h] === providerId);
+  if (S.pair && S.pair.siteId === providerId) {
+    const tab = await chrome.tabs.get(S.pair.tabId).catch(() => null);
+    if (tab && hosts.includes(hostOf(tab.url))) return { ok: true, tabId: tab.id, how: 'paired' };
+  }
+  const dwTab = await chrome.tabs.get(dwTabId).catch(() => null);
+  // devTabMatches / devNewChatUrls exist only in the test build (config.allowDevOverride), for the mock sites.
+  const matches = P.tabMatches.concat(((cfg.devTabMatches || {})[providerId]) || []);
+  const open = (await chrome.tabs.query({ url: matches }).catch(() => [])).filter((t) => hosts.includes(hostOf(t.url)));
+  open.sort((a, b) => ((dwTab && b.windowId === dwTab.windowId) - (dwTab && a.windowId === dwTab.windowId)) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  let tabId = open[0] && open[0].id, how = 'reused';
+  if (tabId == null) {
+    const opts = { url: ((cfg.devNewChatUrls || {})[providerId]) || P.newChatUrl, active: false };
+    if (dwTab) { opts.windowId = dwTab.windowId; opts.index = dwTab.index + 1; }
+    const created = await chrome.tabs.create(opts).catch(() => null);
+    if (!created) return { ok: false, code: 'tab_open_failed' };
+    tabId = created.id; how = 'opened';
+    await waitTabComplete(tabId, 30000);
+  }
+  const r = await pairTab(tabId);
+  if (!r.ok) return { ok: false, code: r.code === 'unsupported_site' ? 'tab_open_failed' : r.code };
+  return { ok: true, tabId, how };
 }
 async function broadcast() {
   for (const id of Object.keys(S.tabs)) await tell(Number(id), { type: 'sw:state', state: publicState(Number(id)) });
@@ -126,6 +179,7 @@ async function pairTab(tabId) {
   const siteId = cfg.aiSites[host];
   if (!siteId) return { ok: false, code: 'unsupported_site' };
   if (S.pair && S.pair.tabId !== tabId) await setPairBadge(S.pair.tabId, false);
+  S.userUnpaired = false;
   S.pair = { tabId, windowId: tab.windowId, siteId, host, title: (tab.title || host).slice(0, 80), pairedAt: Date.now() };
   await persist();
   await ensureGptInjected(tabId);
@@ -134,6 +188,7 @@ async function pairTab(tabId) {
   return { ok: true, pair: S.pair };
 }
 async function unpair() {
+  S.userUnpaired = true; // an explicit Unpair stops the relay: no tab is opened or reused until the user pairs or picks an AI again
   if (S.activeJobId) await abortJob(S.activeJobId, 'unpaired');
   if (S.pair) await setPairBadge(S.pair.tabId, false);
   S.pair = null; S.paused = false; await persist();
@@ -185,12 +240,17 @@ async function handleSubmit(sender, msg) {
   const t = S.tabs[tabId];
   if (!t || t.sub !== v.sub) return { ok: false, code: 'not_active' }; // must have activated with the same person first
   t.validUntilMs = v.validUntilMs; await setIcon(tabId, true);
-  if (!S.pair) return { ok: false, code: 'not_paired' };
-  const tab = await chrome.tabs.get(S.pair.tabId).catch(() => null);
-  if (!tab) { await unpair(); return { ok: false, code: 'not_paired' }; }
   if (S.paused) return { ok: false, code: 'paused' };
   if (S.activeJobId) return { ok: false, code: 'busy' };
   const j = msg.job || {};
+  // v0.1.6: which AI. The editor's choice in this request, else the remembered choice.
+  await providerReady;
+  if (j.provider != null && !DWX.providers.valid(j.provider)) return { ok: false, code: 'bad_provider' };
+  const providerId = j.provider || S.provider;
+  if (j.provider && j.provider !== S.provider) { S.provider = j.provider; await loc.set({ provider: j.provider }); }
+  if (!S.pair && S.userUnpaired && !j.provider) return { ok: false, code: 'not_paired', provider: providerId };
+  const pt = await ensureProviderTab(providerId, tabId);
+  if (!pt.ok) return { ok: false, code: pt.code || 'not_paired', provider: providerId };
   if (typeof j.prompt !== 'string' || !j.prompt || j.prompt.length > 20000) return { ok: false, code: 'bad_job' };
   if (j.file && (typeof j.file.dataUrl !== 'string' || j.file.dataUrl.length > 25 * 1024 * 1024)) return { ok: false, code: 'bad_job' };
   // Page source files (v0.1.3): re-checked here with the same allowlist and caps the content script used.
@@ -209,7 +269,7 @@ async function handleSubmit(sender, msg) {
   await broadcast();
   const r = await dispatch(id, false);
   if (!r.ok) return r;
-  return { ok: true, jobId: id };
+  return { ok: true, jobId: id, provider: providerId, tab: pt.how };
 }
 
 async function dispatch(jobId, forceBundled) {
@@ -312,7 +372,7 @@ async function syncExtraHosts() {
 // ---------- messages ----------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    await ready;
+    await ready; await providerReady;
     const fromExt = sender.url && sender.url.startsWith(chrome.runtime.getURL(''));
     switch (msg && msg.type) {
       case 'dw:activate': return activateTab(sender, msg);
@@ -326,6 +386,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'dw:submit': return handleSubmit(sender, msg);
       case 'dw:control': return control(sender, msg);
       case 'dw:state': return { ok: true, state: publicState(sender.tab && sender.tab.id) };
+      case 'dw:setProvider': {
+        const tid = sender.tab && sender.tab.id;
+        if (!sender.tab || sender.frameId !== 0 || !S.tabs[tid] || !(await isDwHost(hostOf(sender.url)))) return { ok: false, code: 'not_active' };
+        return setProvider(msg.provider);
+      }
+      case 'popup:setProvider': if (!fromExt) return { ok: false }; return setProvider(msg.provider);
       case 'dw:pageStatus': {
         const siteId = S.pair && S.pair.siteId;
         const ai = (typeof siteId === 'string' && DWX.AI_ALLOWLIST[siteId]) ? siteId : null;
@@ -334,7 +400,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const inst = await getInstructions(ai);
           if (inst && inst.instr && typeof inst.instr.revision === 'number') revision = inst.instr.revision;
         }
-        return { ok: true, extVersion: EXT_VERSION, paired: !!S.pair, ai: ai, revision: revision };
+        return { ok: true, extVersion: EXT_VERSION, paired: !!S.pair, ai: ai, revision: revision, provider: S.provider };
       }
       case 'gpt:event': return onGptEvent(sender, msg);
       case 'gpt:keepalive': return { ok: true };
@@ -352,6 +418,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return {
           ok: true, extVersion: EXT_VERSION, pair: S.pair, paused: S.paused, busy: !!S.activeJobId,
           tab: tab ? { id: tab.id, host, title: tab.title, canPair: !!cfg.aiSites[host], dw: await isDwHost(host), httpsOther: tab.url.startsWith('https://') && !cfg.aiSites[host] && !(await isDwHost(host)), active: publicState(tab.id).active } : null,
+          provider: S.provider, providers: DWX.providers.all().map((p) => ({ id: p.id, label: p.label })),
           instructions: out, reportsEnabled: (await loc.get('reportsEnabled')).reportsEnabled !== false, extraHosts: await extraHosts(), dwHosts: cfg.dwHosts
         };
       }
@@ -410,4 +477,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 });
 
 // test visibility only (config.allowDevOverride is false in the shipped build)
-self.__dw = { iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig };
+self.__dw = { iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab };

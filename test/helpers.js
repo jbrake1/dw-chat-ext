@@ -23,3 +23,14 @@ async function mockChat(query = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 module.exports = { bundled, schema, dom, mockChat, sleep, root };
+
+// v0.1.6: Gemini (mock/gemini.html is a best-effort mimic of gemini.google.com; live selectors are unverified).
+const geminiInstr = () => JSON.parse(fs.readFileSync(path.join(root, 'extension/instructions/gemini.json'), 'utf8'));
+async function mockGemini(query = '') {
+  const html = fs.readFileSync(path.join(root, 'mock/gemini.html'), 'utf8');
+  const d = new JSDOM(html, { url: 'https://gemini.google.com/app' + query, runScripts: 'dangerously', pretendToBeVisual: true });
+  return polyfill(d.window);
+}
+module.exports.geminiInstr = geminiInstr;
+module.exports.mockGemini = mockGemini;
+module.exports.polyfill = polyfill;

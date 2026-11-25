@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "DW Chat Integration",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "minimum_chrome_version": "120",
-  "description": "Sends a DW Alliance 'Suggest an edit' request (screenshot, note and the page's source files) to the ChatGPT tab you paired, and shows the streamed reply next to the editor. Active only for signed-in site editors.",
+  "description": "Sends a DW Alliance 'Suggest an edit' request (screenshot, note and the page's source files) to ChatGPT or Gemini in a tab, and shows the streamed reply next to the editor. Active only for signed-in site editors.",
   "permissions": [
     "storage",
     "alarms",
@@ -12,6 +12,7 @@
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
     "https://app.dwalliance.com/*",
     "https://mingapothecary.com/*",
     "https://www.mingapothecary.com/*",
@@ -51,6 +52,9 @@
       ],
       "js": [
         "lib/util.js",
+        "lib/providers/registry.js",
+        "lib/providers/chatgpt.js",
+        "lib/providers/gemini.js",
         "lib/status.js",
         "lib/md.js",
         "lib/pagefiles.js",
@@ -61,7 +65,8 @@
     },
     {
       "matches": [
-        "https://chatgpt.com/*"
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*"
       ],
       "js": [
         "lib/util.js",

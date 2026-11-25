@@ -12,6 +12,10 @@ async function makeEnv({ extDir, headless = true, profileDir, live = false, live
   const { ctx, sw, dir } = await L.launch({ profileDir, extDir, headless, direct: live });
   const base = dwBase || mock.dwUrl;
   const dev = { dwBase: base };
+  // The shipped config carries the production pass key; the mock signs no passes (scenarios that test signing set
+  // their own key). Without this, every mock scenario stays inactive.
+  if (!live && !dwBase) dev.passPublicKeyJwk = null;
+  if (!live) { dev.devTabMatches = { gemini: ['http://127.0.0.2/*'], chatgpt: ['http://127.0.0.1/*'] }; dev.devNewChatUrls = { gemini: mock.gemUrl + '/app?speed=15&tokens=14' }; }
   // Mock/tests fetch patterns from the mock host. A live run keeps the shipped
   // https://dwalliance.com/editor-ai/patterns/{site}.json unless an override is passed.
   if (instructionsUrl) dev.instructionsUrl = instructionsUrl;
@@ -377,7 +381,7 @@ scenarios.popup = async (env) => {
   await L.waitFor(async () => /Paired with/.test(await pop.locator('#pair-status').textContent()), 5000, 'paired text');
   c.check('pair_this_tab_works', (await L.swState(env.sw)).pair.tabId === gptTab);
   c.check('badge_on_paired_tab', (await env.sw.evaluate((t) => chrome.action.getBadgeText({ tabId: t }), gptTab)) === 'AI');
-  { const t = await pop.locator('#instr').textContent(); c.check('instructions_listed_as_verified_bundled', /chatgpt: .*bundled/.test(t) && !/\[unverified\]/.test(t), t); }
+  { const t = await pop.locator('#instr').textContent(); const gl = (t.match(/chatgpt:[^\n]*/) || [''])[0]; c.check('instructions_listed_as_verified_bundled', /chatgpt: .*bundled/.test(gl) && !/\[unverified\]/.test(gl) && /gemini: .*bundled.*\[unverified\]/.test(t), t); }
   await pop.locator('#unpair').click();
   await L.waitFor(async () => /No chat tab paired/.test(await pop.locator('#pair-status').textContent()), 5000, 'unpaired text');
   c.check('unpair_works', (await L.swState(env.sw)).pair === null);
@@ -470,6 +474,71 @@ scenarios['ext-status'] = async (env) => {
 
   const leaked = await dw.evaluate(() => (window.__dwEvents || []).some((m) => m && (m.pairedTitle || m.title || (typeof m.text === 'string' && m.type === 'dw-ext-status'))));
   c.check('status_messages_have_no_tab_title_or_chat_text', leaked === false, leaked);
+  return c.steps;
+};
+
+
+// v0.1.6: Gemini. gemini.google.com is served from mock/gemini.html by a Playwright route (no network, real hostname,
+// so the real manifest match, provider registry and tab open/reuse logic are exercised). Live selectors are unverified.
+const GEM_TABS = 'http://127.0.0.2/*';
+scenarios['gemini-autoopen'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  const sp = await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  c.check('provider_set_to_gemini', sp.ok && sp.provider === 'gemini', sp);
+  const dw = await env.openDw();
+  await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  const tabsBefore = (await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), GEM_TABS)).length;
+  c.check('no_gemini_tab_yet', tabsBefore === 0, tabsBefore);
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_detected', out.done === 'complete', out);
+  const gTabs = await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), GEM_TABS);
+  c.check('opened_one_gemini_tab_in_background', gTabs.length === 1 && gTabs[0].active === false, gTabs.map((t) => ({ active: t.active })));
+  const st = await L.swState(env.sw);
+  c.check('paired_with_gemini', st.pair && st.pair.siteId === 'gemini' && st.provider === 'gemini', st.pair && st.pair.siteId);
+  const steps = await L.panelSteps(dw);
+  c.check('steps_ok', ['newChat', 'prompt', 'text', 'attach', 'send', 'stream'].every((n) => steps.some((s) => s.step === n && s.ok)), steps);
+  const final = await L.panelText(dw, 'reply');
+  c.check('reply_relayed', /Gemini got your request/.test(final || ''), final && final.slice(0, 80));
+  const gp = env.ctx.pages().find((p) => p.url().startsWith(env.mock.gemUrl));
+  const rec = gp ? await gp.evaluate(() => ({ received: window.__received, forbidden: window.__forbidden, menu: window.__menuOpened })) : null;
+  c.check('gemini_received_prompt_and_screenshot', rec && rec.received.length === 1 && /Family owned since 1998/.test(rec.received[0].text) && rec.received[0].files[0].name === 'markup.jpg', rec && { n: rec.received.length, files: rec.received[0] && rec.received[0].files.map((f) => f.name) });
+  c.check('used_plus_menu_never_forbidden_buttons', rec && rec.menu >= 1 && rec.forbidden.length === 0, rec && { menu: rec.menu, forbidden: rec.forbidden });
+  const title = await dw.evaluate(() => document.getElementById('dw-ext-root').shadowRoot.querySelector('[data-role=title]').textContent);
+  c.check('panel_names_gemini', /Gemini/.test(title), title);
+  // second request: the same tab is reused and a New chat is started
+  await dw.reload();
+  const out2 = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('second_done', out2.done === 'complete', out2);
+  const gTabs2 = await env.sw.evaluate((p) => chrome.tabs.query({ url: p }), GEM_TABS);
+  c.check('reused_same_tab', gTabs2.length === 1 && gTabs2[0].id === gTabs[0].id);
+  const rec2 = gp ? await gp.evaluate(() => ({ n: window.__received.length, newChat: window.__newChat, turns: document.querySelectorAll('model-response').length, forbidden: window.__forbidden })) : null;
+  c.check('new_chat_clicked_for_second_request', rec2 && rec2.newChat === 1 && rec2.turns === 1 && rec2.forbidden.length === 0, rec2);
+  return c.steps;
+};
+scenarios['provider-switch'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.openGpt('?speed=10&tokens=12'); await L.pair(env.sw, env.gptPattern);
+  const dw = await env.openDw();
+  // the editor panel's picker switches to Gemini (remembered in storage)
+  await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  await dw.evaluate(() => { const s = document.getElementById('dw-ext-root').shadowRoot.querySelector('[data-role=provider]'); s.value = 'gemini'; s.dispatchEvent(new Event('change')); });
+  await L.sleep(300);
+  const stored = await env.sw.evaluate(() => chrome.storage.local.get('provider'));
+  c.check('picker_saved_gemini', stored.provider === 'gemini', stored);
+  const out = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done', out.done === 'complete', out);
+  const st = await L.swState(env.sw);
+  c.check('moved_pair_to_gemini', st.pair && st.pair.siteId === 'gemini');
+  const gptRec = await env.gptPage.evaluate(() => window.__received.length);
+  c.check('chatgpt_tab_not_used', gptRec === 0, gptRec);
+  // and back to ChatGPT: the open ChatGPT tab is reused
+  await env.sw.evaluate(() => self.__dw.setProvider('chatgpt'));
+  await dw.reload();
+  const out2 = await sendAndWait(env, c, { timeout: 60000 });
+  c.check('done_chatgpt', out2.done === 'complete', out2);
+  c.check('chatgpt_tab_reused', (await env.gptPage.evaluate(() => window.__received.length)) === 1);
   return c.steps;
 };
 

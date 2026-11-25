@@ -61,13 +61,19 @@ function startMock(opts = {}) {
     if (u.pathname === '/' || u.pathname === '/c/test') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(fs.readFileSync(path.join(__dirname, 'chatgpt.html'))); }
     res.writeHead(404); res.end('404');
   });
+  // v0.1.6: mock Gemini on a second loopback address (test build maps 127.0.0.2 -> gemini)
+  const gem = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (/^\/app(\/[A-Za-z0-9]*)?$/.test(u.pathname)) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(fs.readFileSync(path.join(__dirname, 'gemini.html'))); }
+    res.writeHead(404); res.end('404');
+  });
   return new Promise((resolve) => {
-    dw.listen(opts.dwPort || 0, '127.0.0.1', () => gpt.listen(opts.gptPort || 0, '127.0.0.1', () => {
+    dw.listen(opts.dwPort || 0, '127.0.0.1', () => gpt.listen(opts.gptPort || 0, '127.0.0.1', () => gem.listen(opts.gemPort || 0, '127.0.0.2', () => {
       resolve({
-        state, dwUrl: 'http://localhost:' + dw.address().port, gptUrl: 'http://127.0.0.1:' + gpt.address().port,
-        close: () => new Promise((r) => dw.close(() => gpt.close(r)))
+        state, dwUrl: 'http://localhost:' + dw.address().port, gptUrl: 'http://127.0.0.1:' + gpt.address().port, gemUrl: 'http://127.0.0.2:' + gem.address().port,
+        close: () => new Promise((r) => dw.close(() => gpt.close(() => gem.close(r))))
       });
-    }));
+    })));
   });
 }
 module.exports = { startMock };

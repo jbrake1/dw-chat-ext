@@ -36,6 +36,12 @@ test('pageStatus validates version and revision', () => {
   assert.equal(DWX.pageStatus({ revision: 0, editor: true }).revision, 0);
 });
 
-test('AI allowlist is only chatgpt for now', () => {
-  assert.deepEqual(Object.keys(DWX.AI_ALLOWLIST), ['chatgpt']);
+test('AI allowlist is chatgpt and gemini (v0.1.6)', () => {
+  assert.deepEqual(Object.keys(DWX.AI_ALLOWLIST), ['chatgpt', 'gemini']);
+});
+
+test('pageStatus passes the chosen provider only for a confirmed editor and only if allowlisted', () => {
+  assert.equal(DWX.pageStatus({ extVersion: '0.1.6', editor: true, provider: 'gemini' }).provider, 'gemini');
+  assert.equal('provider' in DWX.pageStatus({ extVersion: '0.1.6', editor: true, provider: 'claude' }), false);
+  assert.equal('provider' in DWX.pageStatus({ extVersion: '0.1.6', editor: false, provider: 'gemini' }), false);
 });

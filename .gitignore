@@ -28,3 +28,7 @@ tmp/
 .DS_Store
 *.swp
 *~
+
+# local symlink to the shared node_modules, and e2e screenshots
+/node_modules
+shots/

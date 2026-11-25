@@ -47,20 +47,26 @@
     // Constructable stylesheet: not subject to a page's style-src CSP. Falls back to a <style> element.
     try { var sheet = new CSSStyleSheet(); sheet.replaceSync(CSS); root.adoptedStyleSheets = [sheet]; }
     catch (e) { root.appendChild(el(doc, 'style', null, CSS)); }
-    var wrap = el(doc, 'div', { class: 'wrap', role: 'region', 'aria-label': 'ChatGPT relay' });
+    var P = window.DWX && DWX.providers;
+    function L(id) { return P ? P.label(id) : 'ChatGPT'; }
+    var wrap = el(doc, 'div', { class: 'wrap', role: 'region', 'aria-label': 'AI relay' });
     var hd = el(doc, 'div', { class: 'hd' });
     var dot = el(doc, 'span', { class: 'dot', 'data-role': 'dot' });
     var title = el(doc, 'span', { class: 'title', 'data-role': 'title' }, 'ChatGPT relay');
     var spin = el(doc, 'span', { class: 'spin off', 'data-role': 'spin', 'aria-hidden': 'true' });
-    var bStop = el(doc, 'button', { type: 'button', 'data-act': 'stop', title: 'Stop ChatGPT (clicks its Stop button)' }, 'Stop');
+    // v0.1.6: which AI gets the request (remembered by the extension).
+    var pick = el(doc, 'select', { 'data-role': 'provider', 'aria-label': 'AI', title: 'Which AI gets your request' });
+    (P ? P.all() : [{ id: 'chatgpt', label: 'ChatGPT' }]).forEach(function (p) { var o = el(doc, 'option', { value: p.id }, p.label); pick.appendChild(o); });
+    var bStop = el(doc, 'button', { type: 'button', 'data-act': 'stop', title: 'Stop the AI (clicks its Stop button)' }, 'Stop');
     var bPause = el(doc, 'button', { type: 'button', 'data-act': 'pause', title: 'Hold the relay; nothing new is sent until you resume' }, 'Pause');
-    var bUnpair = el(doc, 'button', { type: 'button', 'data-act': 'unpair', title: 'Forget the paired ChatGPT tab' }, 'Unpair');
+    var bUnpair = el(doc, 'button', { type: 'button', 'data-act': 'unpair', title: 'Forget the paired AI tab' }, 'Unpair');
     var bMin = el(doc, 'button', { type: 'button', 'data-act': 'min', title: 'Collapse' }, '\u2212');
-    [dot, title, spin, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
+    [dot, title, pick, spin, bStop, bPause, bUnpair, bMin].forEach(function (n) { hd.appendChild(n); });
     var opt = el(doc, 'label', { class: 'opt' });
     var chk = el(doc, 'input', { type: 'checkbox', 'data-role': 'relay-toggle' });
     chk.checked = true;
-    opt.appendChild(chk); opt.appendChild(el(doc, 'span', null, 'Also send my request to ChatGPT when I press Send'));
+    opt.appendChild(chk); var optText = el(doc, 'span', { 'data-role': 'relay-text' }, 'Also send my request to ChatGPT when I press Send');
+    opt.appendChild(optText);
     var scroll = el(doc, 'div', { class: 'scroll', 'data-role': 'scroll', role: 'log', 'aria-live': 'polite' });
     var body = el(doc, 'div', { 'data-role': 'body' });
     body.appendChild(opt); body.appendChild(scroll);
@@ -77,6 +83,7 @@
     bUnpair.addEventListener('click', function () { h.onUnpair(); });
     bMin.addEventListener('click', function () { var hidden = body.classList.toggle('hide'); bMin.textContent = hidden ? '+' : '\u2212'; place(); });
     chk.addEventListener('change', function () { h.onToggle(chk.checked); });
+    pick.addEventListener('change', function () { if (h.onProvider) h.onProvider(pick.value); });
 
     // ---- docking above the editor's note box ----
     var notebox = null, ro = null, mo = null, markupMo = null;
@@ -121,13 +128,21 @@
     function render() {
       var s = state;
       dot.className = 'dot' + (s.paused ? ' paused' : (s.active && s.paired ? ' on' : ''));
-      title.textContent = !s.active ? 'ChatGPT relay (waiting for editor pass)' : !s.paired ? 'ChatGPT relay: no tab paired' : 'Paired with ChatGPT';
+      var want = s.provider || 'chatgpt', name = L(want);
+      if (pick.value !== want) pick.value = want;
+      pick.disabled = !!s.busy;
+      optText.textContent = 'Also send my request to ' + name + ' when I press Send';
+      var pairedHere = s.paired && (!s.site || s.site === want);
+      title.textContent = !s.active ? name + ' relay (waiting for editor pass)' : pairedHere ? 'Paired with ' + name : !s.paired ? name + ' relay: no tab paired' : name + ' relay';
       bStop.disabled = !s.busy; bPause.disabled = !s.paired; bUnpair.disabled = !s.paired;
       bPause.textContent = s.paused ? 'Resume' : 'Pause';
-      chk.disabled = !s.paired;
-      if (!s.paired && !scroll.querySelector('[data-role=hint]')) {
-        scroll.insertBefore(el(doc, 'div', { class: 'note', 'data-role': 'hint' }, 'To use ChatGPT here: open chatgpt.com in another tab, click the DW Chat Integration icon there, then \u201cPair this tab\u201d.'), scroll.firstChild);
-      } else if (s.paired) { var hint = scroll.querySelector('[data-role=hint]'); if (hint) hint.remove(); }
+      chk.disabled = !s.active;
+      var hint = scroll.querySelector('[data-role=hint]');
+      if (!pairedHere) {
+        var ht = 'On Send, an open ' + name + ' tab is reused, or a new one opens in the background. Sign in to ' + name + ' in Chrome first.';
+        if (!hint) scroll.insertBefore(el(doc, 'div', { class: 'note', 'data-role': 'hint' }, ht), scroll.firstChild);
+        else hint.textContent = ht;
+      } else if (hint) hint.remove();
     }
     render();
 

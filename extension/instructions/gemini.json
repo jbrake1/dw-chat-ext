@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "site": "gemini",
+  "revision": 1,
+  "version": "2026.11.24-1",
+  "minExtVersion": "0.1.6",
+  "verified": false,
+  "notes": "UNVERIFIED against a live signed-in gemini.google.com: built 2026-11-24 from public knowledge of Gemini's web DOM (Angular custom elements: rich-textarea with a Quill .ql-editor, uploader + 'Open upload file menu' button, send-button / Stop response, user-query and model-response turns, message-content .markdown, code-block with a .code-block-decoration header) plus saved fixtures (harness/snapshots/gemini-fixture-*.html). The owner's screenshot (Pro plan, 2026-11-24) shows the home page 'Where should we start?', an 'Ask Gemini' input, a '+' upload/tools button on its left, a model picker and a mic button. The guard keeps the runner off the model picker, Upgrade, Get app, share/delete/rename/settings. Every step lists fallbacks; attach tries an existing file input, then the '+' menu's file input (never the OS file chooser), then drop, then paste.",
+  "integrity": {
+    "alg": "sha256",
+    "hash": "ae4fd47e211ad99d1579585984df985594ffaf7041216575226e69795bd326f1",
+    "sig": "",
+    "keyId": ""
+  },
+  "match": {
+    "hosts": [
+      "gemini.google.com"
+    ]
+  },
+  "guard": {
+    "neverClick": [
+      "upgrade",
+      "get app",
+      "try (gemini )?(advanced|pro|ultra)",
+      "model|mode picker|hydrogen|flash|thinking|deep research",
+      "\\b(delete|rename|share|archive|pin|export|report)\\b",
+      "settings|activity|sign out|log out"
+    ]
+  },
+  "flow": [
+    "newChat",
+    "text",
+    "attach",
+    "send"
+  ],
+  "steps": {
+    "loggedOut": {
+      "strict": true,
+      "selectors": [
+        "a[href*='accounts.google.com/ServiceLogin']",
+        "a[href*='accounts.google.com/v3/signin']",
+        {
+          "css": "a[aria-label], button[aria-label]",
+          "textMatches": "^\\s*sign in\\s*$"
+        }
+      ]
+    },
+    "newChat": {
+      "homePath": "^/(u/\\d+/)?app/?$",
+      "timeoutMs": 10000,
+      "selectors": [
+        "side-nav-action-button[data-test-id='new-chat-button'] a",
+        "side-nav-action-button[data-test-id='new-chat-button'] button",
+        "[data-test-id='new-chat-button'] a",
+        "[data-test-id='new-chat-button'] button",
+        "a[aria-label='New chat']",
+        "button[aria-label='New chat']",
+        {
+          "css": "a, button",
+          "textMatches": "^\\s*new chat\\s*$"
+        }
+      ]
+    },
+    "prompt": {
+      "selectors": [
+        "rich-textarea div.ql-editor[contenteditable='true']",
+        "div.ql-editor[contenteditable='true'][role='textbox']",
+        "div.ql-editor[contenteditable='true']",
+        "[contenteditable='true'][aria-label*='Gemini' i]",
+        "[contenteditable='true'][aria-label*='prompt' i]",
+        "input-area-v2 [contenteditable='true']",
+        "div[contenteditable='true'][role='textbox']"
+      ],
+      "timeoutMs": 30000,
+      "setText": [
+        "execCommand",
+        "paste",
+        "textContent"
+      ],
+      "clearFirst": true
+    },
+    "attach": {
+      "strategies": [
+        {
+          "type": "fileInput",
+          "selectors": [
+            "uploader input[type='file']",
+            "input[type='file'][name='Filedata']",
+            "input-area-v2 input[type='file']",
+            "input[type='file'][multiple]"
+          ],
+          "waitMs": 500
+        },
+        {
+          "type": "menuFileInput",
+          "openSelectors": [
+            "uploader button[aria-label='Open upload file menu']",
+            "button[aria-label='Open upload file menu']",
+            "button.upload-card-button",
+            "uploader button",
+            "button[aria-label*='upload' i]",
+            "button[aria-label*='add files' i]"
+          ],
+          "selectors": [
+            "uploader input[type='file']",
+            "input[type='file'][name='Filedata']",
+            "input[type='file']"
+          ],
+          "waitMs": 3000,
+          "closeMenu": true
+        },
+        {
+          "type": "drop",
+          "selectors": [
+            "xap-uploader-dropzone",
+            "[xapfileselectordropzone]",
+            "input-area-v2",
+            "rich-textarea"
+          ]
+        },
+        {
+          "type": "paste"
+        }
+      ],
+      "confirm": {
+        "selectors": [
+          "uploader-file-preview",
+          "[data-test-id='file-preview']",
+          "[data-test-id='image-preview']",
+          ".file-preview-container .file-preview",
+          "button[aria-label^='Remove file' i]",
+          "button[aria-label^='Remove' i][aria-label*='file' i]",
+          "input-area-v2 img[src^='blob:']"
+        ],
+        "timeoutMs": 30000
+      }
+    },
+    "send": {
+      "selectors": [
+        "button.send-button[aria-label='Send message']",
+        "button[aria-label='Send message']",
+        ".send-button-container button.send-button:not(.stop)",
+        "button[aria-label^='Send' i]"
+      ],
+      "timeoutMs": 90000,
+      "requireEnabled": true,
+      "fallbackKey": "Enter"
+    },
+    "stop": {
+      "selectors": [
+        "button[aria-label='Stop response']",
+        "button.send-button.stop",
+        "button[aria-label^='Stop' i][aria-label*='respon' i]",
+        "button[aria-label^='Stop' i]"
+      ]
+    },
+    "assistantMessage": {
+      "selectors": [
+        "model-response",
+        "[data-test-id='model-response']",
+        "div.model-response-text",
+        "message-content.model-response-text"
+      ],
+      "textSelectors": [
+        "message-content .markdown",
+        ".markdown.markdown-main-panel",
+        ".model-response-text .markdown",
+        "message-content",
+        ".markdown"
+      ],
+      "pick": "last"
+    },
+    "blocks": {
+      "ignoreSelectors": [
+        ".code-block-decoration",
+        "code-block .buttons",
+        "button",
+        "mat-icon",
+        "model-thoughts",
+        "sources-list"
+      ],
+      "langSelectors": [
+        ".code-block-decoration > span",
+        ".code-block-decoration span",
+        ".code-block-decoration"
+      ]
+    },
+    "files": {
+      "allowedHosts": [
+        "lh3.googleusercontent.com",
+        "googleusercontent.com"
+      ],
+      "links": [
+        {
+          "selectors": [
+            "message-content a[download]"
+          ],
+          "kind": "file"
+        },
+        {
+          "selectors": [
+            "message-content .markdown a[href^='http']"
+          ],
+          "kind": "link"
+        }
+      ],
+      "images": [
+        {
+          "selectors": [
+            "generated-image img[src*='googleusercontent.com']",
+            "single-image img[src*='googleusercontent.com']"
+          ]
+        }
+      ]
+    },
+    "errors": [
+      {
+        "selectors": [
+          {
+            "css": "snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, [role='alert'], [role='dialog']",
+            "textMatches": "you.{0,3}ve (reached|hit) (your|the) (usage |daily |upload |file |prompt )?limit"
+          },
+          {
+            "css": "snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, [role='alert'], [role='dialog']",
+            "textMatches": "limit resets|upload limit|out of (uploads|prompts|data analysis)"
+          },
+          {
+            "css": "model-response message-content",
+            "textMatches": "^\\s*you.{0,3}ve (reached|hit) (your|the) (usage |daily |upload |file |prompt )?limit"
+          },
+          {
+            "css": "model-response message-content",
+            "textMatches": "^\\s*you.{0,3}re out of"
+          }
+        ],
+        "code": "usage_limit"
+      },
+      {
+        "selectors": [
+          {
+            "css": "snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, [role='alert'], [role='dialog']",
+            "textMatches": "sign in to (upload|continue|use|keep)|signed out"
+          }
+        ],
+        "code": "not_logged_in"
+      },
+      {
+        "selectors": [
+          {
+            "css": "snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, [role='alert']",
+            "textMatches": "too many requests|rate limit|try again later"
+          }
+        ],
+        "code": "rate_limited"
+      },
+      {
+        "selectors": [
+          {
+            "css": "snack-bar-container, mat-snack-bar-container, .mat-mdc-snack-bar-container, [role='alert']",
+            "textMatches": "something went wrong|network error|couldn.t (upload|send)|failed to upload|file (type )?(is )?not supported|too large"
+          }
+        ],
+        "code": "chat_error"
+      }
+    ]
+  },
+  "stream": {
+    "startTimeoutMs": 120000,
+    "maxDurationMs": 900000,
+    "noReplyGraceMs": 10000,
+    "emitMinIntervalMs": 150,
+    "done": {
+      "all": [
+        {
+          "type": "newMessage"
+        },
+        {
+          "type": "absent",
+          "step": "stop"
+        },
+        {
+          "type": "textStable",
+          "ms": 2000
+        }
+      ]
+    }
+  }
+}

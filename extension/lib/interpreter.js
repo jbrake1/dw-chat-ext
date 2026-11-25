@@ -60,6 +60,39 @@
     return !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !el.hasAttribute('data-disabled');
   }
 
+  // v0.1.6: safety guard. instr.guard.neverClick is a list of case-insensitive regexes; the runner refuses to click any
+  // element whose text or aria-label matches one (e.g. upgrade buttons, model pickers, share/delete/rename/settings).
+  function guardRes(guard) {
+    var out = [];
+    ((guard && guard.neverClick) || []).forEach(function (src) { try { out.push(new RegExp(src, 'i')); } catch (e) {} });
+    return out;
+  }
+  function blockedByGuard(el, guard) {
+    var res = guardRes(guard);
+    if (!res.length || !el) return false;
+    var t = norm((el.textContent || '') + ' ' + ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + ((el.getAttribute && el.getAttribute('title')) || ''));
+    return res.some(function (re) { return re.test(t); });
+  }
+  function safeClick(el, guard, step) {
+    if (blockedByGuard(el, guard)) throw StepError(step || 'guard', 'blocked_click');
+    el.click();
+  }
+
+  // Wait until predicate() is true, re-checking on DOM mutations (no polling). One one-shot timer = the timeout.
+  function waitUntil(win, doc, predicate, opts) {
+    opts = opts || {};
+    return new Promise(function (resolveP, reject) {
+      var mo = null, timer = null;
+      function cleanup() { if (mo) { mo.disconnect(); mo = null; } if (timer != null) { win.clearTimeout(timer); timer = null; } }
+      function check() { var v = false; try { v = predicate(); } catch (e) {} if (v) { cleanup(); resolveP(true); } return v; }
+      if (opts.signal && opts.signal.aborted) return reject(StepError(opts.step || 'wait', 'aborted'));
+      if (check()) return;
+      mo = new win.MutationObserver(check);
+      mo.observe(doc.documentElement || doc, { childList: true, subtree: true, attributes: true });
+      timer = win.setTimeout(function () { cleanup(); reject(StepError(opts.step || 'wait', opts.timeoutCode || 'timeout')); }, opts.timeoutMs == null ? 10000 : opts.timeoutMs);
+    });
+  }
+
   // Wait for a selector list to match, using a MutationObserver (no polling). One one-shot timer = the timeout.
   function waitFor(win, rootNode, selectors, opts) {
     opts = opts || {};
@@ -187,8 +220,8 @@
   }
 
   var ATTACH_STRATEGIES = {
-    fileInput: function (win, doc, strat, promptEl, file) {
-      var r = resolve(doc, strat.selectors);
+    fileInput: function (win, doc, strat, promptEl, file, given) {
+      var r = (given && given.nodeType === 1) ? { el: given } : resolve(doc, strat.selectors);
       if (!r.el) throw StepError('attach', 'selector_not_found');
       var dt = makeDataTransfer(win, file);
       try { r.el.files = dt.files; } catch (e) { Object.defineProperty(r.el, 'files', { value: dt.files, configurable: true }); }
@@ -200,6 +233,34 @@
       promptEl.focus && promptEl.focus();
       promptEl.dispatchEvent(new win.ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
     },
+    // v0.1.6: open the site's upload menu (e.g. a "+" button), then hand the files to the file input the menu renders.
+    // It never clicks the menu item that opens the OS file chooser unless itemSelectors is set, and even then any
+    // click that reaches a file input is cancelled (no native dialog), the files are set on that input directly.
+    menuFileInput: async function (win, doc, strat, promptEl, file, signal, guard) {
+      var input = resolve(doc, strat.selectors).el;
+      var block = null;
+      try {
+        if (!input) {
+          var open = resolve(doc, strat.openSelectors).el;
+          if (!open) throw StepError('attach', 'selector_not_found');
+          safeClick(open, guard, 'attach');
+          if (strat.itemSelectors && strat.itemSelectors.length) {
+            var it = await waitFor(win, doc, strat.itemSelectors, { timeoutMs: strat.waitMs || 3000, step: 'attach', signal: signal });
+            block = function (e) { var t = e.target; if (t && (t.tagName || '').toUpperCase() === 'INPUT' && String(t.type).toLowerCase() === 'file') e.preventDefault(); };
+            doc.addEventListener('click', block, true);
+            safeClick(it.el, guard, 'attach');
+          }
+          input = (await waitFor(win, doc, strat.selectors, { timeoutMs: strat.waitMs || 3000, step: 'attach', signal: signal })).el;
+        }
+        ATTACH_STRATEGIES.fileInput(win, doc, { selectors: [] }, promptEl, file, input);
+      } finally {
+        if (block) doc.removeEventListener('click', block, true);
+        if (strat.closeMenu !== false) {
+          try { (doc.activeElement || doc.body).dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })); } catch (e) {}
+          try { promptEl && promptEl.focus && promptEl.focus(); } catch (e) {}
+        }
+      }
+    },
     drop: function (win, doc, strat, promptEl, file) {
       var target = strat.selectors ? (resolve(doc, strat.selectors).el || promptEl) : promptEl;
       var dt = makeDataTransfer(win, file);
@@ -209,7 +270,7 @@
     }
   };
 
-  async function attachFile(win, doc, step, promptEl, file, signal) {
+  async function attachFile(win, doc, step, promptEl, file, signal, guard) {
     var strategies = step.strategies || [];
     var lastCode = 'attach_failed';
     for (var i = 0; i < strategies.length; i++) {
@@ -220,7 +281,7 @@
         if (s.type === 'fileInput' && s.waitMs) {
           try { await waitFor(win, doc, s.selectors, { timeoutMs: s.waitMs, step: 'attach', signal: signal }); } catch (e) { if (e.code === 'aborted') throw e; }
         }
-        fn(win, doc, s, promptEl, file);
+        await fn(win, doc, s, promptEl, file, s.type === 'menuFileInput' ? signal : undefined, guard);
         var n = Array.isArray(file) ? file.length : 1, shown = null;
         if (step.confirm && step.confirm.selectors && step.confirm.selectors.length) {
           await waitFor(win, doc, step.confirm.selectors, { timeoutMs: step.confirm.timeoutMs || 15000, step: 'attach', timeoutCode: 'attach_not_confirmed', signal: signal });
@@ -228,7 +289,7 @@
         }
         return { strategy: s.type, index: i, count: n, shown: shown };
       } catch (e) {
-        if (e && e.code === 'aborted') throw e;
+        if (e && (e.code === 'aborted' || e.code === 'blocked_click')) throw e;
         lastCode = (e && e.code) || 'attach_failed';
       }
     }
@@ -236,10 +297,10 @@
   }
 
   // ---------- send ----------
-  async function clickSend(win, doc, step, promptEl, signal) {
+  async function clickSend(win, doc, step, promptEl, signal, guard) {
     var accept = step.requireEnabled === false ? null : isEnabled;
     try {
-      var r = await waitFor(win, doc, step.selectors, { timeoutMs: step.timeoutMs || 15000, step: 'send', accept: accept, signal: signal });
+      var r = await waitFor(win, doc, step.selectors, { timeoutMs: step.timeoutMs || 15000, step: 'send', accept: function (el) { return (!accept || accept(el)) && !blockedByGuard(el, guard); }, signal: signal });
       r.el.click();
       return { index: r.index, via: 'click' };
     } catch (e) {
@@ -319,11 +380,27 @@
     if (msgs.length <= baseline) return out;
     var target = (steps.assistantMessage.pick === 'first-new') ? msgs[baseline] : msgs[msgs.length - 1];
     var SHOW_TEXT = 4, between = '', inPre = null;
+    var bcfg = steps.blocks || {};
+    // v0.1.6: text inside these elements (code-block headers such as a language chip or copy button) is not part of
+    // the "File: /path" label; langSelectors read the language from such a header when <code> has no language- class.
+    var ignored = new Set();
+    (bcfg.ignoreSelectors || []).forEach(function (sel) { matchOne(target, sel).forEach(function (e) { ignored.add(e); }); });
+    function isIgnored(n) { var e = n.parentNode; while (e && e !== target) { if (ignored.has(e)) return true; e = e.parentNode; } return false; }
+    function langNear(pre) {
+      if (!bcfg.langSelectors) return '';
+      var e = pre.parentNode;
+      for (var k = 0; k < 5 && e && e !== target; k++, e = e.parentNode) {
+        var r = resolve(e, bcfg.langSelectors);
+        if (r.el && !r.el.contains(pre)) { var t = norm(r.el.textContent).toLowerCase(); return /^[a-z0-9+#._-]{1,20}$/.test(t) ? t : ''; }
+      }
+      return '';
+    }
     var walker = doc.createTreeWalker(target, SHOW_TEXT, null);
     function preOf(n) { var e = n.parentNode; while (e && e !== target) { if (e.nodeName === 'PRE') return e; e = e.parentNode; } return null; }
     var node;
     while ((node = walker.nextNode())) {
       var pre = preOf(node);
+      if (!pre && isIgnored(node)) continue;
       if (!pre) { inPre = null; between += node.data; if (between.length > 4000) between = between.slice(-4000); continue; }
       if (pre === inPre) continue;
       inPre = pre;
@@ -333,10 +410,17 @@
       var lm = /(?:^|\s)language-([A-Za-z0-9+#._-]{1,20})/.exec((code && code.getAttribute('class')) || '');
       if (text.length > BLOCK_LIM.code || total + text.length > BLOCK_LIM.total) { between = ''; continue; }
       total += text.length;
-      out.push({ label: norm(between).slice(-BLOCK_LIM.label), lang: lm ? lm[1].toLowerCase() : '', code: text });
+      out.push({ label: norm(between).slice(-BLOCK_LIM.label), lang: lm ? lm[1].toLowerCase() : langNear(pre), code: text });
       between = '';
     }
     return out;
+  }
+
+  // v0.1.6: the first known notice (limit, sign-in, error banner) on the page, or null. Same entries as steps.errors.
+  function readNotice(doc, instr) {
+    var code = null;
+    ((instr.steps && instr.steps.errors) || []).some(function (e) { if (resolve(doc, e.selectors).el) { code = e.code; return true; } return false; });
+    return code;
   }
 
   function countMessages(doc, instr) {
@@ -424,6 +508,7 @@
   return {
     StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
     isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, clickSend: clickSend,
+    readNotice: readNotice, waitUntil: waitUntil, safeClick: safeClick, blockedByGuard: blockedByGuard,
     readState: readState, detectLimit: detectLimit, limitMatch: limitMatch, limitWhen: limitWhen, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf
   };
 });

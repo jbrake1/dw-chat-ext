@@ -3,7 +3,7 @@
  * revision, and editor. No tab titles, hosts, prompts, replies or screenshots. */
 (function (root) {
   'use strict';
-  var AI_ALLOWLIST = { chatgpt: true };
+  var AI_ALLOWLIST = { chatgpt: true, gemini: true };
   var VER = /^[0-9A-Za-z._-]{1,32}$/;
   function pageStatus(input) {
     var src = input && typeof input === 'object' ? input : {};
@@ -16,7 +16,10 @@
     if (typeof src.revision === 'number' && isFinite(src.revision) && src.revision >= 0 && src.revision === Math.floor(src.revision) && src.revision <= 1e9) {
       revision = src.revision;
     }
-    return { extVersion: extVersion, paired: paired, ai: ai, revision: revision, editor: editor };
+    var out = { extVersion: extVersion, paired: paired, ai: ai, revision: revision, editor: editor };
+    // v0.1.6: the editor's chosen AI (allowlisted id), only when the extension is on for a confirmed editor.
+    if (editor && typeof src.provider === 'string' && AI_ALLOWLIST[src.provider]) out.provider = src.provider;
+    return out;
   }
   root.DWX = root.DWX || {};
   root.DWX.AI_ALLOWLIST = AI_ALLOWLIST;

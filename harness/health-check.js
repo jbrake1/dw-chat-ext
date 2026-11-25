@@ -32,8 +32,11 @@ function run(instr, snaps, opts = {}) {
   };
   const s = instr.steps;
   add('idle', 'prompt', s.prompt.selectors);
+  // v0.1.6: a site whose file input only appears once its upload menu is opened (menuFileInput) is checked by its menu button.
+  const menu = s.attach.strategies.find((x) => x.type === 'menuFileInput');
   const fi = (s.attach.strategies.find((x) => x.type === 'fileInput') || {}).selectors;
-  if (fi) add('idle', 'attach.fileInput', fi);
+  if (menu) add('idle', 'attach.menu', menu.openSelectors);
+  else if (fi) add('idle', 'attach.fileInput', fi);
   if (s.loggedOut) absent('idle', 'loggedOut_not_shown', s.loggedOut.selectors);
   add('typing', 'send', s.send.selectors, { note: 'send button must exist once text is typed' });
   if (s.attach.confirm) add('typing', 'attach.confirm', s.attach.confirm.selectors);

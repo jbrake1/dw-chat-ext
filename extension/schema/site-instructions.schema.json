@@ -28,13 +28,36 @@
       "type": "object", "required": ["hosts"], "additionalProperties": false,
       "properties": { "hosts": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "pattern": "^[a-z0-9.-]{3,80}$" } } }
     },
-    "flow": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "enum": ["text", "attach", "send"] }, "description": "Order of the input steps." },
+    "flow": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "enum": ["newChat", "text", "attach", "send"] }, "description": "Order of the input steps. \"newChat\" (v0.1.6, optional, first) starts an empty conversation before the prompt box is used." },
+    "guard": {
+      "type": "object", "additionalProperties": false,
+      "description": "v0.1.6: safety. The runner never clicks an element whose text or aria-label matches any neverClick regex (case-insensitive).",
+      "properties": { "neverClick": { "type": "array", "maxItems": 12, "items": { "type": "string", "minLength": 1, "maxLength": 120 } } }
+    },
     "steps": {
       "type": "object",
       "required": ["prompt", "attach", "send", "stop", "assistantMessage"],
       "additionalProperties": false,
       "properties": {
-        "loggedOut": { "$ref": "#/definitions/selectorStep" },
+        "loggedOut": {
+          "type": "object", "required": ["selectors"], "additionalProperties": false,
+          "properties": {
+            "selectors": { "$ref": "#/definitions/selectors" },
+            "strict": { "type": "boolean", "description": "v0.1.6: true = signed out even when a prompt box is shown (sites that allow anonymous chat but not uploads)." }
+          }
+        },
+        "newChat": {
+          "type": "object", "required": ["selectors"], "additionalProperties": false,
+          "properties": {
+            "selectors": { "$ref": "#/definitions/selectors" },
+            "homePath": { "type": "string", "maxLength": 120, "description": "Regex for location.pathname of the empty new-chat page; when it matches and no assistant message is shown, nothing is clicked." },
+            "timeoutMs": { "type": "integer", "minimum": 500, "maximum": 60000 }
+          }
+        },
+        "blocks": {
+          "type": "object", "additionalProperties": false, "description": "v0.1.6: code-block reading hints (header text to skip, language chip).",
+          "properties": { "ignoreSelectors": { "$ref": "#/definitions/selectors" }, "langSelectors": { "$ref": "#/definitions/selectors" } }
+        },
         "prompt": {
           "type": "object", "required": ["selectors"], "additionalProperties": false,
           "properties": {
@@ -52,8 +75,11 @@
               "items": {
                 "type": "object", "required": ["type"], "additionalProperties": false,
                 "properties": {
-                  "type": { "enum": ["fileInput", "paste", "drop"] },
+                  "type": { "enum": ["fileInput", "menuFileInput", "paste", "drop"] },
                   "selectors": { "$ref": "#/definitions/selectors" },
+                  "openSelectors": { "$ref": "#/definitions/selectors" },
+                  "itemSelectors": { "$ref": "#/definitions/selectors" },
+                  "closeMenu": { "type": "boolean" },
                   "waitMs": { "type": "integer", "minimum": 0, "maximum": 30000 }
                 }
               }
