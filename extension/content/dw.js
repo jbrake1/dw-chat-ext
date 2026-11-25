@@ -12,7 +12,26 @@
   var S = { active: false, relay: true, state: { active: false, paired: false, paused: false, busy: false }, nativeHook: false,
             nativePanel: false, wantEvents: false, panel: null, lastGesture: 0, jobId: null, pending: null, renewTimer: null, activating: false, activateP: null, cfg: {} };
 
-  function send(msg) { return chrome.runtime.sendMessage(msg).catch(function () { return { ok: false, code: 'sw_unreachable' }; }); }
+  // After the extension is reloaded or updated, this old script is orphaned: chrome.runtime.sendMessage throws
+  // ("Extension context invalidated"). Report that instead of failing silently.
+  function send(msg) {
+    try { return chrome.runtime.sendMessage(msg).catch(function () { return { ok: false, code: 'sw_unreachable' }; }); }
+    catch (e) { return Promise.resolve({ ok: false, code: 'sw_unreachable' }); }
+  }
+  // Page-side relay log (v0.1.7): kept in sessionStorage so it survives a reload or a closed editor, and copied into the
+  // extension's own ring buffer. Event names and codes only.
+  var LOG_KEY = 'dwx_relaylog', LOG_MAX = 60;
+  function dwLog(ev, data) {
+    try {
+      var arr = JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]');
+      var e = { t: Date.now(), ev: String(ev).slice(0, 30) };
+      if (data && typeof data === 'object') Object.keys(data).slice(0, 6).forEach(function (k) { var v = data[k]; e[k] = (v == null || typeof v === 'number' || typeof v === 'boolean') ? v : String(v).slice(0, 60); });
+      arr.push(e); if (arr.length > LOG_MAX) arr = arr.slice(-LOG_MAX);
+      sessionStorage.setItem(LOG_KEY, JSON.stringify(arr));
+    } catch (e) {}
+    try { chrome.runtime.sendMessage({ type: 'dw:log', ev: ev, data: data || {} }).catch(function () {}); } catch (e) {}
+  }
+  function pageLog() { try { return JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]'); } catch (e) { return []; } }
   function withTimeout(promise, ms, code) {
     var t;
     return Promise.race([
@@ -92,6 +111,7 @@
   }
   function deactivate() {
     var was = S.active;
+    dwLog('deactivate', { was: was });
     S.active = false; S.pending = null;
     if (S.renewTimer) { clearTimeout(S.renewTimer); S.renewTimer = null; }
     if (S.panel) { S.panel.destroy(); S.panel = null; }
@@ -132,9 +152,9 @@
     return { time: time, day: day, phrase: time ? (day ? day + ' ' : '') + 'after ' + time : 'later' };
   }
   function onSubmitEvent(d, via) {
-    if (!S.active || !S.relay) return;                       // inactive or user switched the relay off: do nothing
+    if (!S.active || !S.relay) { dwLog('submit_ignored', { why: !S.active ? 'inactive' : 'relay_off', via: via }); if (via === 'native' && S.wantEvents) toPage('dw-ext-error', { code: !S.active ? 'ext_inactive' : 'relay_off', step: 'submit' }); return; }   // inactive or user switched the relay off
     if (via === 'tap' && S.nativeHook) return;               // page has its own hook; ignore the tap
-    if (Date.now() - S.lastGesture > 120000) return;         // must follow a real click/keypress by the user (no scripted sends)
+    if (Date.now() - S.lastGesture > 120000) { dwLog('submit_ignored', { why: 'no_gesture', via: via }); if (via === 'native' && S.wantEvents) toPage('dw-ext-error', { code: 'no_gesture', step: 'submit' }); return; }   // must follow a real click/keypress by the user
     var note = String(d.note || '').slice(0, 5000);
     var shot = typeof d.screenshot === 'string' && DATA_URL.test(d.screenshot) && d.screenshot.length < 20 * 1024 * 1024 ? d.screenshot : null;
     var mime = shot ? DATA_URL.exec(shot)[1] : null;
@@ -163,22 +183,30 @@
   }
   function aiName(id) { return DWX.providers.label(id || S.state.provider || DWX.providers.DEFAULT_ID); }
   function queue(job) { S.pending = job; if (S.panel) S.panel.note('Paused. This will be sent to ' + aiName(job.provider) + ' when you press Resume.'); }
+  // A send that failed before the service worker was busy (not paired, no pass, no answer) must not leave the panel on
+  // "Sending to ..." forever: no state event follows, so return it to idle here.
+  function idlePanel() {
+    if (S.panel) S.panel.setState(Object.assign({}, S.state, { active: S.active, provider: S.jobProvider, busy: false }));
+  }
   async function submitJob(job) {
     if (S.state.paused) return queue(job);                   // nothing new is sent while paused
     S.jobProvider = job.provider || (S.state && S.state.provider) || DWX.providers.DEFAULT_ID;
     S.workGen = (S.workGen || 0) + 1;
     var gen = S.workGen;
     S.stopped = false;
+    dwLog('submit', { provider: S.jobProvider, files: (job.files || []).length, shot: !!job.file });
     if (S.panel) {
       S.panel.setState(Object.assign({}, S.state, { active: S.active, provider: S.jobProvider, busy: true }));
       S.panel.addUser((job.note || '(no note)').slice(0, 300), job.file && job.file.dataUrl);
     }
     var p = await fetchPass();                               // fresh pass for every send
+    dwLog('pass', { ok: !!p });
     if (gen !== S.workGen || S.stopped) return;
-    if (!p) { if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
+    if (!p) { idlePanel(); if (S.panel) S.panel.error('Not sent: the site did not confirm you are an editor.'); return deactivate(); }
     var sj = { prompt: job.prompt, file: job.file, files: job.files || [] };
     if (job.provider) sj.provider = job.provider;
     var r = await withTimeout(send({ type: 'dw:submit', pass: p.pass, receivedAt: p.receivedAt, job: sj }), 45000, 'relay_timeout');
+    dwLog('submit_result', { ok: !!(r && r.ok), code: r && r.code });
     if (gen !== S.workGen || S.stopped) return;
     if (r && r.ok) { S.jobId = r.jobId; S.jobProvider = r.provider || job.provider || S.state.provider; return; }
     var code = (r && r.code) || 'unknown';
@@ -186,8 +214,10 @@
     var pid = (r && r.provider) || job.provider || S.state.provider;
     var msg = (['not_paired', 'busy', 'chat_tab_unreachable', 'tab_open_failed'].indexOf(code) >= 0 && DWX.providers.message(pid, code))
       || (code === 'relay_timeout' ? ('Not sent: ' + aiName(pid) + ' did not start in time.') : null)
+      || (code === 'sw_unreachable' ? 'Not sent: the extension was reloaded or updated. Reload this page to reconnect it.' : null)
       || (code === 'stopped' ? null : ('Not sent (' + code + ').'));
     if (code === 'stopped') return;
+    idlePanel();
     if (S.panel) S.panel.error(msg);
     if (S.wantEvents) toPage('dw-ext-error', { code: code, step: 'submit' });
   }
@@ -210,6 +240,7 @@
     if (msg.type !== 'sw:event') return;
     var e = msg.event || {};
     var P = S.panel;
+    if (e.kind === 'step' || e.kind === 'error' || e.kind === 'done') dwLog('ev:' + e.kind, { step: e.step, code: e.code, status: e.status, ok: e.ok });
     if (e.kind === 'step') {
       if (P) P.step(e.step, e.ok !== false, e.detail && (e.detail.strategy || e.detail.source || (e.detail.selectorIndex != null ? '#' + e.detail.selectorIndex : '')), e.step === 'attach' && e.detail ? e.detail.pageFiles : null);
       var stepMsg = { step: e.step, ok: e.ok !== false };
@@ -249,6 +280,9 @@
       } else if (d.type === 'dw-ext-status') {
         if (!S.active && candidate()) maybeActivate();
         replyStatus();
+      } else if (d.type === 'dw-ext-diag') {
+        // The editor asks for a snapshot of the relay (step names, codes and timings only; no notes, replies or screenshots).
+        send({ type: 'dw:diag' }).then(function (r) { toPage('dw-ext-diag-result', { ok: !!(r && r.ok), code: r && r.code, ext: r && r.diag ? r.diag : null, page: pageLog(), active: S.active, extVersion: EXT_VERSION }); });
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
       else if (d.type === 'dw-ext-provider' && S.active && DWX.providers.valid(d.provider)) send({ type: 'dw:setProvider', provider: d.provider });
       else if (d.type === 'dw-ext-control' && d.action === 'stop') localStop();

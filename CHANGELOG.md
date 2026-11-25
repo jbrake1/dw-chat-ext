@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.7 — 2026-11-24
+
+- **Fixes the silent "nothing happened" after Send.** Chrome does not start a newly installed or updated extension in tabs that were already open, so an editor page opened before the install had no relay: Send saved the request, closed the form and flashed the toast, and nothing else happened. Now (1) the extension starts itself in already-open editor tabs when it is installed, updated or reloaded, and (2) if a page still has no relay, Send keeps the chat window open with a clear message ("Your edit request was saved, but the AI relay is not running on this page… reload this page, then press Send again") instead of closing, and the toast no longer promises a reply.
+- **Relay log that survives a reload.** The editor keeps a short log of step names and codes in sessionStorage, the extension keeps a ring buffer in its own storage, and the page keeps one too. If a page is reloaded or closed mid-request, the next load shows "The last request did not finish… (last step: …)".
+- **Copy diagnostics** in the extension popup and in the chat window (on errors and no-relay): last step reached, errors, handshake and inject timeouts, instruction status, tab state and the last events. It holds no notes, replies, screenshots, file names or page addresses.
+- A send that fails before the AI is reached (not paired, no editor pass, extension reloaded) no longer leaves the panel title on "Sending to …".
+- New messages for a reloaded or updated extension ("Reload this page to reconnect it"), the relay switched off, and a send without a fresh click.
+- Test harness: version and title checks no longer hard-code old values; new `diagnostics` scenario.
+
 ## v0.1.6.1 — 2026-11-24
 
 - Provider-named labels now follow the selected AI. With Gemini selected, the relay title is "Sending to Gemini…", steps say "Opening Gemini" and "Gemini is reading…", and errors say "Gemini". The same applies to ChatGPT.

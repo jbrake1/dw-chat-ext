@@ -50,6 +50,12 @@
     if (granted) await chrome.runtime.sendMessage({ type: 'popup:addHost', host: host });
     refresh();
   });
+  $('diag').addEventListener('click', async function () {
+    var r = await chrome.runtime.sendMessage({ type: 'popup:diag' });
+    var text = JSON.stringify(r && r.ok ? r.diag : { error: (r && r.code) || 'no_answer' }, null, 1);
+    try { await navigator.clipboard.writeText(text); $('diag-status').textContent = 'Copied (' + text.length + ' characters). Paste it into your message.'; }
+    catch (e) { $('diag-status').textContent = 'Could not copy automatically.'; var ta = document.createElement('textarea'); ta.value = text; ta.rows = 6; ta.style.width = '100%'; $('diag-status').appendChild(ta); ta.select(); }
+  });
   $('provider').addEventListener('change', async function () { await chrome.runtime.sendMessage({ type: 'popup:setProvider', provider: $('provider').value }); refresh(); });
   refresh();
 })();

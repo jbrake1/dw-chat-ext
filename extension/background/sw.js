@@ -46,6 +46,50 @@ const ready = (async () => {
 })();
 const persist = () => ses.set({ pair: S.pair, tabs: S.tabs, jobs: S.jobs, paused: S.paused, activeJobId: S.activeJobId, userUnpaired: S.userUnpaired });
 
+// ---------- relay log (v0.1.7) ----------
+// A small ring buffer kept in storage.local (survives a service-worker restart, a page reload and a closed editor) so a
+// stall or a teardown right after Send can be diagnosed. Only step names, codes, provider ids and timings go in: never
+// prompts, notes, replies, screenshots, page URLs or tab titles.
+const DLOG_MAX = 200;
+let dlog = [];
+const dlogReady = loc.get('dlog').then((d) => { if (Array.isArray(d.dlog)) dlog = d.dlog.slice(-DLOG_MAX); }).catch(() => {});
+function dl(ev, data) {
+  try {
+    const e = { t: Date.now(), ev: String(ev).replace(/[^a-z0-9_:.-]/gi, '_').slice(0, 40) };
+    if (data && typeof data === 'object') {
+      Object.keys(data).slice(0, 8).forEach((k) => {
+        const v = data[k];
+        e[String(k).slice(0, 16)] = (v == null || typeof v === 'number' || typeof v === 'boolean') ? v : String(v).slice(0, 80);
+      });
+    }
+    dlog.push(e);
+    if (dlog.length > DLOG_MAX) dlog.splice(0, dlog.length - DLOG_MAX);
+    loc.set({ dlog }).catch(() => {});
+  } catch (e) { /* logging never breaks the relay */ }
+}
+function lastOf(pred) { for (let i = dlog.length - 1; i >= 0; i--) if (pred(dlog[i])) return dlog[i]; return null; }
+async function diagSnapshot() {
+  await dlogReady;
+  const job = S.activeJobId && S.jobs[S.activeJobId];
+  const cfg = await getConfig();
+  const instr = {};
+  for (const siteId of [...new Set(Object.values(cfg.aiSites))]) {
+    const g = await getInstructions(siteId).catch(() => null);
+    const st = (await loc.get('instrStatus:' + siteId))['instrStatus:' + siteId] || null;
+    instr[siteId] = g ? { source: g.source, version: g.instr.version, revision: g.instr.revision, verified: !!g.instr.verified, lastCheck: st ? (st.status + (st.code ? ' ' + st.code : '')) : null } : null;
+  }
+  const step = lastOf((e) => e.ev === 'gpt' && e.kind === 'step');
+  const err = lastOf((e) => /^(gpt_error|reject|submit_exc|timeout|dispatch_fail|inject|sw_error)$/.test(e.ev) && (e.ev !== 'inject' || e.ok === false) && (e.ev !== 'reject' || e.code));
+  return {
+    now: Date.now(), extVersion: EXT_VERSION, provider: S.provider, paired: !!S.pair, pairSite: S.pair ? S.pair.siteId : null,
+    paused: S.paused, userUnpaired: S.userUnpaired, stopGen: S.stopGen, editorTabs: Object.keys(S.tabs).length,
+    busy: !!S.activeJobId, activeJob: job ? { id: job.id, site: job.siteId, instr: job.instrSource + ' ' + job.instrVersion, ageMs: Date.now() - job.startedAt } : null,
+    lastStep: step ? { step: step.step, ok: step.ok, at: step.t } : null,
+    lastError: err ? Object.assign({}, err) : null,
+    instructions: instr, log: dlog.slice(-120)
+  };
+}
+
 // ---------- helpers ----------
 const reporter = new DWX.Reporter({
   fetch: (...a) => fetch(...a),
@@ -83,7 +127,7 @@ function tell(tabId, msg) { return chrome.tabs.sendMessage(tabId, msg, { frameId
 function withTimeout(promise, ms, code) {
   let t;
   const p = Promise.resolve(promise);
-  const to = new Promise((_, rej) => { t = setTimeout(() => rej(Object.assign(new Error(code), { code })), ms); });
+  const to = new Promise((_, rej) => { t = setTimeout(() => { dl('timeout', { code, ms }); rej(Object.assign(new Error(code), { code })); }, ms); });
   return Promise.race([p, to]).finally(() => clearTimeout(t));
 }
 
@@ -125,7 +169,8 @@ async function ensureProviderTab(providerId, dwTabId) {
   const hosts = Object.keys(cfg.aiSites).filter((h) => cfg.aiSites[h] === providerId);
   if (S.pair && S.pair.siteId === providerId) {
     const tab = await chrome.tabs.get(S.pair.tabId).catch(() => null);
-    if (tab && hosts.includes(hostOf(tab.url))) return { ok: true, tabId: tab.id, how: 'paired' };
+    if (tab && hosts.includes(hostOf(tab.url))) { dl('tab', { provider: providerId, how: 'paired', tab: tab.id }); return { ok: true, tabId: tab.id, how: 'paired' }; }
+    dl('tab_stale', { provider: providerId, gone: !tab });
   }
   const dwTab = await chrome.tabs.get(dwTabId).catch(() => null);
   // devTabMatches / devNewChatUrls exist only in the test build (config.allowDevOverride), for the mock sites.
@@ -139,11 +184,13 @@ async function ensureProviderTab(providerId, dwTabId) {
     let created = null;
     try { created = await withTimeout(chrome.tabs.create(opts), 10000, 'tab_open_failed'); }
     catch (e) { created = null; }
-    if (!created) return { ok: false, code: 'tab_open_failed' };
+    if (!created) { dl('tab_open_failed', { provider: providerId }); return { ok: false, code: 'tab_open_failed' }; }
     tabId = created.id; how = 'opened';
-    await waitTabComplete(tabId, 30000);
+    const loaded = await waitTabComplete(tabId, 30000);
+    dl('tab_loaded', { provider: providerId, ok: loaded });
   }
   const r = await pairTab(tabId);
+  dl('tab', { provider: providerId, how, tab: tabId, paired: r.ok, code: r.code });
   if (!r.ok) return { ok: false, code: r.code === 'unsupported_site' ? 'tab_open_failed' : r.code };
   return { ok: true, tabId, how };
 }
@@ -206,12 +253,14 @@ async function unpair() {
 async function ensureGptInjected(tabId) {
   try {
     const alive = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'gpt:ping' }).catch(() => null), 4000, 'ping_timeout');
-    if (alive && alive.ok) return { ok: true };
+    if (alive && alive.ok) { dl('inject', { tab: tabId, ok: true, how: 'already' }); return { ok: true }; }
   } catch (e) { /* ping timed out or failed; try injecting */ }
   try {
     await withTimeout(chrome.scripting.executeScript({ target: { tabId }, files: GPT_FILES }), 8000, 'inject_timeout');
+    dl('inject', { tab: tabId, ok: true, how: 'injected' });
     return { ok: true };
   } catch (e) {
+    dl('inject', { tab: tabId, ok: false, code: (e && e.code) || 'exec_failed', msg: e && e.message });
     return { ok: false, code: 'chat_tab_unreachable' };
   }
 }
@@ -249,6 +298,17 @@ async function deactivateTab(tabId) {
 function newId() { return 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
 async function handleSubmit(sender, msg) {
+  await dlogReady;
+  const j0 = (msg && msg.job) || {};
+  dl('submit_in', { provider: j0.provider, files: Array.isArray(j0.files) ? j0.files.length : 0, shot: !!j0.file });
+  let r;
+  try { r = await handleSubmit0(sender, msg); }
+  catch (e) { dl('submit_exc', { msg: e && e.message }); throw e; }
+  dl('submit_out', { ok: !!(r && r.ok), code: r && r.code, how: r && r.tab, job: r && r.jobId });
+  if (r && !r.ok) dl('reject', { code: r.code });
+  return r;
+}
+async function handleSubmit0(sender, msg) {
   const v = await checkPass(sender, msg.pass, msg.receivedAt);
   const tabId = sender.tab && sender.tab.id;
   if (!v.ok) return { ok: false, code: 'no_valid_pass:' + v.code };
@@ -296,8 +356,9 @@ async function handleSubmit(sender, msg) {
 async function dispatch(jobId, forceBundled) {
   const job = S.jobs[jobId];
   const inst = await getInstructions(job.siteId, forceBundled);
-  if (!inst) { await finishJob(jobId); return { ok: false, code: 'no_instructions' }; }
+  if (!inst) { dl('dispatch_fail', { job: jobId, code: 'no_instructions', site: job.siteId }); await finishJob(jobId); return { ok: false, code: 'no_instructions' }; }
   job.instrSource = inst.source; job.instrVersion = inst.instr.version;
+  dl('dispatch', { job: jobId, site: job.siteId, src: inst.source, ver: inst.instr.version, bundled: !!forceBundled });
   await persist();
   try {
     const inj = await ensureGptInjected(job.gptTabId);
@@ -305,6 +366,7 @@ async function dispatch(jobId, forceBundled) {
     const r = await withTimeout(chrome.tabs.sendMessage(job.gptTabId, { type: 'gpt:run', jobId, instr: inst.instr, job: payloads[jobId] }), 8000, 'no_ack');
     if (!r || !r.ok) throw new Error('no ack');
   } catch (e) {
+    dl('dispatch_fail', { job: jobId, code: 'chat_tab_unreachable', msg: e && e.message });
     await report(job.siteId, 'tab', 'chat_tab_unreachable', inst.instr.version);
     await tell(job.dwTabId, { type: 'sw:event', jobId, event: { kind: 'error', step: 'tab', code: 'chat_tab_unreachable', sent: false, fatal: true } });
     await finishJob(jobId);
@@ -332,6 +394,10 @@ async function onGptEvent(sender, msg) {
   const job = S.jobs[msg.jobId];
   if (!job || !S.pair || !sender.tab || sender.tab.id !== job.gptTabId) return { ok: false };
   const evt = msg.event || {};
+  if (evt.kind === 'error') dl('gpt_error', { job: job.id, step: evt.step, code: evt.code, sent: evt.sent });
+  else if (evt.kind === 'step') dl('gpt', { kind: 'step', step: evt.step, ok: evt.ok !== false, job: job.id });
+  else if (evt.kind === 'done') dl('gpt', { kind: 'done', status: evt.status, job: job.id });
+  else if (evt.kind === 'chunk' && evt.seq === 1) dl('gpt', { kind: 'chunk1', job: job.id });
   if (evt.kind === 'error') {
     await report(job.siteId, evt.step || 'unknown', evt.code || 'unknown', job.instrVersion);
     if (!evt.sent && job.instrSource === 'remote' && !job.retried && payloads[job.id]) {
@@ -355,6 +421,7 @@ async function control(sender, msg) {
   const host = hostOf(sender.url);
   if (!sender.tab || sender.frameId !== 0 || !(await isDwHost(host)) || !S.tabs[tabId]) return { ok: false, code: 'not_active' };
   const job = S.activeJobId && S.jobs[S.activeJobId];
+  dl('control', { action: msg.action, job: job ? job.id : null });
   switch (msg.action) {
     case 'stop':
       S.stopGen++;
@@ -413,6 +480,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'dw:deactivate': if (sender.tab) await deactivateTab(sender.tab.id); return { ok: true };
       case 'dw:submit': return handleSubmit(sender, msg);
+      case 'dw:log': {
+        const tid = sender.tab && sender.tab.id;
+        if (!sender.tab || sender.frameId !== 0 || !(await isDwHost(hostOf(sender.url)))) return { ok: false };
+        await dlogReady;
+        const d = (msg.data && typeof msg.data === 'object') ? msg.data : {};
+        const safe = {}; Object.keys(d).slice(0, 6).forEach((k) => { safe[k] = d[k]; });
+        dl('page:' + String(msg.ev || '').slice(0, 30), Object.assign({ tab: tid }, safe));
+        return { ok: true };
+      }
+      case 'dw:diag': {
+        if (!sender.tab || sender.frameId !== 0 || !(await isDwHost(hostOf(sender.url))) || !S.tabs[sender.tab.id]) return { ok: false, code: 'not_active' };
+        return { ok: true, diag: await diagSnapshot() };
+      }
+      case 'popup:diag': if (!fromExt) return { ok: false }; return { ok: true, diag: await diagSnapshot() };
       case 'dw:control': return control(sender, msg);
       case 'dw:state': return { ok: true, state: publicState(sender.tab && sender.tab.id) };
       case 'dw:setProvider': {
@@ -464,9 +545,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       default: return { ok: false, code: 'unknown_message' };
     }
-  })().then(sendResponse, (e) => sendResponse({ ok: false, code: 'sw_error', message: String(e && e.message) }));
+  })().then(sendResponse, (e) => { dl('sw_error', { type: msg && msg.type, msg: e && e.message }); sendResponse({ ok: false, code: 'sw_error', message: String(e && e.message) }); });
   return true;
 });
+
+// ---------- install / update: reach tabs that were already open (v0.1.7) ----------
+// Chrome does not run a newly installed or updated extension's content scripts in tabs that are already open, so an editor
+// page opened before the install would never see the extension (Send would save the request and nothing would relay).
+// Inject the DW-site script there now. The script is inactive until the page looks like an editor session, and it guards
+// against running twice. Needs no new permission: the DW hosts are already in host_permissions.
+async function injectIntoOpenDwTabs(reason) {
+  let n = 0, fail = 0;
+  try {
+    const cfg = await getConfig();
+    const hosts = [...new Set([...(cfg.dwHosts || []), ...(await extraHosts())])];
+    const tabs = await chrome.tabs.query({ url: hosts.map((h) => 'https://' + h + '/*') });
+    for (const t of tabs) {
+      try { await chrome.scripting.executeScript({ target: { tabId: t.id }, files: DW_FILES }); n++; }
+      catch (e) { fail++; dl('inject_dw_fail', { tab: t.id, msg: e && e.message }); }
+    }
+  } catch (e) { dl('inject_dw_exc', { msg: e && e.message }); }
+  dl('inject_dw', { reason, tabs: n, failed: fail });
+}
+chrome.runtime.onInstalled.addListener((d) => { dl('installed', { reason: d && d.reason, ver: EXT_VERSION }); ready.then(() => injectIntoOpenDwTabs((d && d.reason) || 'installed')); });
 
 // ---------- lifecycle ----------
 async function startup(reason) {
@@ -506,4 +607,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 });
 
 // test visibility only (config.allowDevOverride is false in the shipped build)
-self.__dw = { iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab };
+self.__dw = { dl, diagSnapshot, injectIntoOpenDwTabs, iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab };

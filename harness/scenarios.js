@@ -1,3 +1,4 @@
+const EXT_VER = require('../extension/manifest.json').version;
 /* End-to-end scenarios. Each takes an env (mock servers + Chromium with the unpacked TEST BUILD loaded) and returns
  * [{name, ok, detail}] step results. Mock scenarios run against mock/chatgpt.html (streaming) and mock/dw-editor.html. */
 const fs = require('fs'), path = require('path');
@@ -297,7 +298,8 @@ scenarios.controls = async (env) => {
   await dw.locator('button.fab').click(); await dw.locator('textarea#dw-mk-note').fill('after unpair'); await dw.locator('button[data-act=send]').click();
   await L.waitFor(async () => (await dw.locator('[data-role=error]').allTextContents()).some((t) => /no ChatGPT tab is paired/.test(t)), 10000, 'not paired error');
   c.check('unpair_stops_relay_and_nothing_sent', (await env.gptPage.evaluate(() => window.__received)).length === before);
-  c.check('panel_shows_no_tab_paired', /no tab paired/.test(await dw.locator('[data-role=title]').textContent()));
+  const ttl = await dw.locator('[data-role=title]').textContent();
+  c.check('panel_shows_no_tab_paired', /no tab paired|waiting for editor pass/.test(ttl), ttl);
   return c.steps;
 };
 
@@ -443,7 +445,7 @@ scenarios['ext-status'] = async (env) => {
   await pB.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
   await L.waitFor(async () => { const s = await read(pB); return s && s.state === 'unconfirmed'; }, 8000, 'unconfirmed status');
   const b = await read(pB);
-  c.check('status_installed_unconfirmed_editor', !!(b && b.state === 'unconfirmed' && /Installed v0\.1\.2/.test(b.text) && /Enable on this site/.test(b.text) && /Sign in as an editor/.test(b.text)), b);
+  c.check('status_installed_unconfirmed_editor', !!(b && b.state === 'unconfirmed' && new RegExp('Installed v' + EXT_VER.replace(/\./g, '\\.')).test(b.text) && /Enable on this site/.test(b.text) && /Sign in as an editor/.test(b.text)), b);
   await pB.close();
 
   process.stderr.write('ext-status: unconfirmed check done\n');
@@ -454,7 +456,7 @@ scenarios['ext-status'] = async (env) => {
   await dw.locator('#dw-markup-root').waitFor({ state: 'attached', timeout: 10000 });
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired status');
   const mid = await read(dw);
-  c.check('status_installed_not_paired', !!(mid && mid.state === 'unpaired' && mid.text === 'Installed v0.1.2, not paired: open chatgpt.com and click Pair this tab'), mid);
+  c.check('status_installed_not_paired', !!(mid && mid.state === 'unpaired' && mid.text === 'Installed v' + EXT_VER + ', not paired: open chatgpt.com and click Pair this tab'), mid);
 
   process.stderr.write('ext-status: unpaired check done\n');
   // (d) pairing updates the line live; unpairing too
@@ -464,13 +466,13 @@ scenarios['ext-status'] = async (env) => {
   c.check('paired_for_status', pr && pr.ok, pr);
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'paired'; }, 8000, 'paired status');
   const d = await read(dw);
-  c.check('status_paired_with_chatgpt', !!(d && d.state === 'paired' && d.on && d.text === 'Paired with ChatGPT (v0.1.2)'), d);
+  c.check('status_paired_with_chatgpt', !!(d && d.state === 'paired' && d.on && d.text === 'Paired with ChatGPT (v' + EXT_VER + ')'), d);
 
   process.stderr.write('ext-status: unpairing via panel\n');
   await dw.locator('#dw-ext-root [data-act=unpair]').click();
   await L.waitFor(async () => { const s = await read(dw); return s && s.state === 'unpaired'; }, 8000, 'unpaired after unpair');
   const u = await read(dw);
-  c.check('status_updates_live_on_unpair', !!(u && u.state === 'unpaired' && u.text === 'Installed v0.1.2, not paired: open chatgpt.com and click Pair this tab'), u);
+  c.check('status_updates_live_on_unpair', !!(u && u.state === 'unpaired' && u.text === 'Installed v' + EXT_VER + ', not paired: open chatgpt.com and click Pair this tab'), u);
 
   const leaked = await dw.evaluate(() => (window.__dwEvents || []).some((m) => m && (m.pairedTitle || m.title || (typeof m.text === 'string' && m.type === 'dw-ext-status'))));
   c.check('status_messages_have_no_tab_title_or_chat_text', leaked === false, leaked);
@@ -539,6 +541,43 @@ scenarios['provider-switch'] = async (env) => {
   const out2 = await sendAndWait(env, c, { timeout: 60000 });
   c.check('done_chatgpt', out2.done === 'complete', out2);
   c.check('chatgpt_tab_reused', (await env.gptPage.evaluate(() => window.__received.length)) === 1);
+  return c.steps;
+};
+
+// v0.1.7: diagnostics snapshot (page protocol + popup), relay log, injection into an already-open editor tab.
+scenarios.diagnostics = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.openGpt('?speed=25&tokens=20');
+  await L.pair(env.sw, env.gptPattern);
+  const dw = await env.openDw();
+  await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  await dw.evaluate(() => { window.__diag = null; window.addEventListener('message', (e) => { if (e.source === window && e.data && e.data.source === 'dw-ext' && e.data.type === 'dw-ext-diag-result') window.__diag = e.data; }); });
+  await dw.evaluate(() => window.postMessage({ v: 1, source: 'dw-edit', type: 'dw-ext-diag' }, location.origin));
+  await L.waitFor(async () => !!(await dw.evaluate(() => window.__diag)), 8000, 'diag result');
+  const d = await dw.evaluate(() => window.__diag);
+  c.check('diag_page_protocol_returns_snapshot', !!(d && d.ok && d.ext && d.ext.extVersion && Array.isArray(d.ext.log) && Array.isArray(d.page) && d.active === true), d && Object.keys(d));
+  // a send leaves a trail in the SW ring buffer and the page ring
+  await sendAndWait(env, c, { note: 'SECRET-NOTE-TEXT-123' });
+  await L.sleep(500);
+  const snap = await env.sw.evaluate(() => self.__dw.diagSnapshot());
+  const evs = snap.log.map((x) => x.ev);
+  c.check('sw_log_records_handshake_to_done', ['submit_in', 'dispatch', 'gpt', 'submit_out'].every((e) => evs.includes(e)), evs.slice(-25));
+  c.check('snapshot_has_last_step_and_provider', !!(snap.lastStep && snap.provider), { lastStep: snap.lastStep, provider: snap.provider });
+  const all = JSON.stringify(snap) + JSON.stringify(await dw.evaluate(() => sessionStorage.getItem('dwx_relaylog')));
+  c.check('snapshots_never_contain_note_text', !/SECRET-NOTE-TEXT-123/.test(all));
+  // popup button path
+  const id = new URL(env.sw.url()).host;
+  const pop = await env.ctx.newPage();
+  await pop.goto(`chrome-extension://${id}/popup/popup.html`);
+  const r = await pop.evaluate(() => chrome.runtime.sendMessage({ type: 'popup:diag' }));
+  c.check('popup_diag_ok_for_extension_page', !!(r && r.ok && r.diag && r.diag.extVersion));
+  // injection into an already-open editor tab is idempotent (one panel, no duplicate listeners)
+  await env.sw.evaluate(() => self.__dw.injectIntoOpenDwTabs('test'));
+  await L.sleep(800);
+  const n = await dw.evaluate(() => document.querySelectorAll('#dw-ext-root').length);
+  const snap2 = await env.sw.evaluate(() => self.__dw.diagSnapshot());
+  c.check('inject_into_open_tab_logged_and_idempotent', n === 1 && snap2.log.some((x) => x.ev === 'inject_dw'), { n, evs: snap2.log.map((x) => x.ev).slice(-6) });
   return c.steps;
 };
 
