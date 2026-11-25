@@ -581,6 +581,37 @@ scenarios.diagnostics = async (env) => {
   return c.steps;
 };
 
+
+// v0.1.8: redacted AI-page structure snapshot (upload if an editor tab is open, otherwise download).
+scenarios.snapshot = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.openGpt('?speed=25&tokens=20');
+  await env.gptPage.evaluate(() => {
+    const p = document.createElement('p');
+    p.id = 'secret-line';
+    p.textContent = 'SECRET-CHAT-LINE-XYZ';
+    document.body.appendChild(p);
+    const i = document.createElement('input');
+    i.value = 'secret-input-value';
+    document.body.appendChild(i);
+  });
+  await L.pair(env.sw, env.gptPattern);
+  const dw = await env.openDw();
+  await dw.waitForSelector('#dw-ext-root', { state: 'attached', timeout: 15000 });
+  const r = await env.sw.evaluate(() => self.__dw.handleSnapshot('test'));
+  c.check('snapshot_returns_short_id', !!(r && r.ok && r.id && /^s[0-9a-z]{6,12}$/.test(r.id)), r && { ok: r.ok, via: r.via, id: r.id, code: r.code });
+  c.check('snapshot_uploaded_to_editor_endpoint', !!(r && r.via === 'upload'), r && r.via);
+  const st = await (await env.ctx.request.get(env.dwUrl + '/__state')).json();
+  const snap = (st.snapshots || []).find((x) => x.id === (r && r.id));
+  c.check('mock_stored_snapshot_without_chat_text', !!(snap && snap.hasSecret === false && snap.hasQuery === false && snap.selectorCount >= 40), snap || st.snapshots);
+  const id = new URL(env.sw.url()).host;
+  const pop = await env.ctx.newPage();
+  await pop.goto(`chrome-extension://${id}/popup/popup.html`);
+  c.check('popup_has_send_page_snapshot', await pop.locator('#snap').count() === 1);
+  return c.steps;
+};
+
 module.exports = { scenarios, makeEnv, sendAndWait, lastAssistantText, NOTE };
 
 // ---- live: real chatgpt.com in a persistent test profile (user signed in once, never automated) ----

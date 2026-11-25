@@ -56,6 +56,17 @@
     try { await navigator.clipboard.writeText(text); $('diag-status').textContent = 'Copied (' + text.length + ' characters). Paste it into your message.'; }
     catch (e) { $('diag-status').textContent = 'Could not copy automatically.'; var ta = document.createElement('textarea'); ta.value = text; ta.rows = 6; ta.style.width = '100%'; $('diag-status').appendChild(ta); ta.select(); }
   });
+  $('snap').addEventListener('click', async function () {
+    $('snap-status').textContent = 'Capturing…';
+    var r = await chrome.runtime.sendMessage({ type: 'popup:snapshot' });
+    if (!r || !r.ok) { $('snap-status').textContent = 'Could not capture' + (r && r.code === 'no_ai_tab' ? ': open or pair a ChatGPT or Gemini tab, then try again.' : (r && r.code ? ' (' + r.code + ').' : '.')); return; }
+    if (r.via === 'download' && r.json) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.json], { type: 'application/json' })); a.download = r.filename || ('dw-snap-' + r.id + '.json'); document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      $('snap-status').textContent = 'Downloaded. Snapshot id: ' + r.id + ' (no editor tab was available to upload it).';
+    } else {
+      $('snap-status').textContent = 'Sent. Snapshot id: ' + r.id;
+    }
+  });
   $('provider').addEventListener('change', async function () { await chrome.runtime.sendMessage({ type: 'popup:setProvider', provider: $('provider').value }); refresh(); });
   refresh();
 })();

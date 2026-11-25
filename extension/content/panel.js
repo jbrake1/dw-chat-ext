@@ -221,7 +221,26 @@
         autoscroll();
       },
       done: function (status) { ensureReply(); replyEl.classList.remove('live'); replyEl.setAttribute('data-done', status); spin.classList.add('off'); if (status === 'stopped') this.note('Stopped.'); },
-      error: function (msg) { scroll.appendChild(el(doc, 'div', { class: 'error', 'data-role': 'error' }, msg)); if (replyEl) replyEl.classList.remove('live'); spin.classList.add('off'); dot.classList.add('err'); autoscroll(); },
+      error: function (msg) {
+        scroll.appendChild(el(doc, 'div', { class: 'error', 'data-role': 'error' }, msg));
+        if (replyEl) replyEl.classList.remove('live'); spin.classList.add('off'); dot.classList.add('err');
+        if (h.onSnapshot && !scroll.querySelector('[data-act=snapshot]')) {
+          var row = el(doc, 'div', { class: 'note', 'data-role': 'snap-row' });
+          var b = el(doc, 'button', { type: 'button', 'data-act': 'snapshot' }, 'Send page snapshot');
+          var st = el(doc, 'span', { 'data-role': 'snap-status' }, '');
+          b.addEventListener('click', function () {
+            st.textContent = ' Capturing…';
+            Promise.resolve(h.onSnapshot()).then(function (r) {
+              st.textContent = !r || !r.ok ? (' Could not capture' + (r && r.code ? ' (' + r.code + ').' : '.')) : (r.via === 'upload' ? (' Sent. Snapshot id: ' + r.id) : (' Downloaded. Snapshot id: ' + r.id));
+              if (r && r.ok && r.via === 'download' && r.json) {
+                var a = doc.createElement('a'); a.href = URL.createObjectURL(new Blob([r.json], { type: 'application/json' })); a.download = r.filename || ('dw-snap-' + r.id + '.json'); doc.documentElement.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+              }
+            }).catch(function () { st.textContent = ' Could not capture.'; });
+          });
+          row.appendChild(b); row.appendChild(st); scroll.appendChild(row);
+        }
+        autoscroll();
+      },
       place: place,
       destroy: function () { if (mo) mo.disconnect(); if (markupMo) markupMo.disconnect(); if (ro) ro.disconnect(); window.removeEventListener('resize', place); host.remove(); }
     };

@@ -69,5 +69,5 @@ test('sw.js: persisted relay log, diagnostics snapshot, injection into already-o
 test('popup has a Copy diagnostics button; manifest is 0.1.7', () => {
   assert.ok(read('extension/popup/popup.html').includes('id="diag"'));
   assert.ok(read('extension/popup/popup.js').includes('popup:diag'));
-  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.7');
+  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.8');
 });

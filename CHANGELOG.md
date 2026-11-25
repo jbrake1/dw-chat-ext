@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.8 — 2026-11-24
+
+- **Send page snapshot** (popup, and the chat window on an error): captures a redacted structure of the paired AI tab (ChatGPT or Gemini) so a selector or layout problem can be diagnosed. It keeps tags, id, class, role, aria-*, data-* and testid, contenteditable/disabled, shadow and iframe structure, and button, label and placeholder text. Chat text and input values become length markers; scripts, styles and query strings are dropped. Each selector in that AI's instructions file is listed with a match count and pass/fail.
+- The snapshot is uploaded to an editor-only endpoint (`POST /markup/?a=snapshot`) with the same checks as staged file saves (signed-in editor, same origin, CSRF). It is stored outside the webroot, size-capped, with the last 20 kept per site. `/_dw/ext/report` and `/_dw/ext/files` stay disabled.
+- If no editor tab is available to upload through, the snapshot is downloaded instead. A short snapshot id is shown either way.
+
 ## v0.1.7 — 2026-11-24
 
 - **Fixes the silent "nothing happened" after Send.** Chrome does not start a newly installed or updated extension in tabs that were already open, so an editor page opened before the install had no relay: Send saved the request, closed the form and flashed the toast, and nothing else happened. Now (1) the extension starts itself in already-open editor tabs when it is installed, updated or reloaded, and (2) if a page still has no relay, Send keeps the chat window open with a clear message ("Your edit request was saved, but the AI relay is not running on this page… reload this page, then press Send again") instead of closing, and the toast no longer promises a reply.

@@ -11,7 +11,7 @@ const { signedPart } = require('../extension/lib/pass.js');
 
 function startMock(opts = {}) {
   const state = {
-    passTtl: 300, passBehavior: 'ok', instructions: null, instructionsStatus: 200, reports: [], markup: [], passCalls: 0, whoamiCalls: 0,
+    passTtl: 300, passBehavior: 'ok', instructions: null, instructionsStatus: 200, reports: [], markup: [], snapshots: [], passCalls: 0, whoamiCalls: 0,
     passKeys: crypto.generateKeyPairSync('ed25519'), signPass: false, extraRequests: []
   };
   const readBody = (req) => new Promise((res) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => res(Buffer.concat(c))); });
@@ -26,9 +26,9 @@ function startMock(opts = {}) {
     if (u.pathname === '/__shot.jpg') { res.writeHead(200, { 'Content-Type': 'image/jpeg' }); return res.end(fs.readFileSync(path.join(__dirname, '../harness/fixtures/sample-screenshot.jpg'))); }
     if (u.pathname === '/__login') { res.writeHead(200, { 'Set-Cookie': ['dw_s=1; Path=/', 'dw_ed=1; Path=/'], 'Content-Type': 'text/plain' }); return res.end('ok'); }
     if (u.pathname === '/__logout') { res.writeHead(200, { 'Set-Cookie': ['dw_s=; Max-Age=0; Path=/', 'dw_ed=; Max-Age=0; Path=/'], 'Content-Type': 'text/plain' }); return res.end('ok'); }
-    if (u.pathname === '/__state') return json(res, 200, { reports: state.reports, markup: state.markup, passCalls: state.passCalls, whoamiCalls: state.whoamiCalls, requests: state.extraRequests });
+    if (u.pathname === '/__state') return json(res, 200, { reports: state.reports, markup: state.markup, snapshots: state.snapshots, passCalls: state.passCalls, whoamiCalls: state.whoamiCalls, requests: state.extraRequests });
     if (u.pathname === '/__set' && req.method === 'POST') { Object.assign(state, JSON.parse((await readBody(req)).toString())); return json(res, 200, { ok: true }); }
-    if (u.pathname === '/__reset') { state.reports = []; state.markup = []; state.passCalls = 0; state.whoamiCalls = 0; state.extraRequests = []; return json(res, 200, { ok: true }); }
+    if (u.pathname === '/__reset') { state.reports = []; state.markup = []; state.snapshots = []; state.passCalls = 0; state.whoamiCalls = 0; state.extraRequests = []; return json(res, 200, { ok: true }); }
     if (u.pathname === '/_dw/whoami') { state.whoamiCalls++; return json(res, 200, { edit: c.dw_s === '1' }); }
     if (u.pathname === '/_dw/ext/pass' && req.method === 'POST') {
       state.passCalls++;
@@ -48,6 +48,18 @@ function startMock(opts = {}) {
       const etag = '"' + crypto.createHash('sha256').update(body).digest('hex') + '"';
       if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' }); return res.end(); }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'ETag': etag }); return res.end(body);
+    }
+    if (u.pathname === '/markup/' && (u.searchParams.get('a') === 'status')) {
+      return json(res, 200, { ok: true, show: true, csrf: 'mock-csrf' });
+    }
+    if (u.pathname === '/markup/' && req.method === 'POST' && u.searchParams.get('a') === 'snapshot') {
+      if (req.headers['x-dw-markup'] !== '1' || req.headers['x-dw-csrf'] !== 'mock-csrf') return json(res, 403, { ok: false, error: 'bad token' });
+      let body = {};
+      try { body = JSON.parse((await readBody(req)).toString()); } catch (e) { return json(res, 400, { ok: false, error: 'bad_json' }); }
+      const raw = JSON.stringify(body);
+      const id = 's' + crypto.randomBytes(4).toString('hex');
+      state.snapshots.push({ id, provider: body.provider, host: body.host, bytes: raw.length, selectorCount: Array.isArray(body.selectors) ? body.selectors.length : 0, hasSecret: /SECRET/.test(raw), hasQuery: /[?]/.test(String(body.host || '')) });
+      return json(res, 200, { ok: true, id });
     }
     if (u.pathname === '/markup/' && req.method === 'POST') {
       const body = await readBody(req);

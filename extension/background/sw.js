@@ -6,7 +6,7 @@ importScripts('../lib/util.js', '../lib/providers/registry.js', '../lib/provider
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
 const GREEN = { 16: 'icons/green-16.png', 32: 'icons/green-32.png', 48: 'icons/green-48.png', 128: 'icons/green-128.png' };
-const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'content/chatgpt.js'];
+const GPT_FILES = ['lib/util.js', 'lib/interpreter.js', 'lib/done.js', 'lib/runner.js', 'lib/snapshot.js', 'content/chatgpt.js'];
 const DW_FILES = ['lib/util.js', 'lib/providers/registry.js', 'lib/providers/chatgpt.js', 'lib/providers/gemini.js', 'lib/status.js', 'lib/md.js', 'lib/pagefiles.js', 'content/panel.js', 'content/dw.js'];
 const ses = chrome.storage.session, loc = chrome.storage.local;
 
@@ -465,6 +465,70 @@ async function syncExtraHosts() {
   }
 }
 
+
+// ---------- AI-page structure snapshot (v0.1.8) ----------
+// Read-only. Never starts, stops or changes a relay job. The redacted DOM is not written to the relay log.
+async function findAiTab() {
+  const cfg = await getConfig();
+  if (S.pair) {
+    const t = await chrome.tabs.get(S.pair.tabId).catch(() => null);
+    if (t && t.url && cfg.aiSites[hostOf(t.url)]) return { tab: t, siteId: cfg.aiSites[hostOf(t.url)] };
+  }
+  const id = S.provider || DWX.providers.DEFAULT_ID;
+  const p = DWX.providers.get(id);
+  const matches = (p && p.hosts ? p.hosts : []).map((h) => 'https://' + h + '/*');
+  const extras = Object.keys(cfg.aiSites || {}).filter((h) => cfg.aiSites[h] === id).map((h) => (h === 'localhost' || /^[0-9.]+$/.test(h) ? 'http://' + h + '/*' : 'https://' + h + '/*'));
+  const tabs = (await chrome.tabs.query({ url: matches.concat(extras).length ? matches.concat(extras) : undefined }).catch(() => [])).filter((t) => cfg.aiSites[hostOf(t.url)] === id);
+  const tab = tabs[0];
+  return tab ? { tab, siteId: id } : null;
+}
+async function findEditorTab() {
+  const now = Date.now();
+  const active = Object.entries(S.tabs).filter(([, t]) => t && t.validUntilMs > now).map(([id]) => Number(id));
+  for (const id of active.reverse()) {
+    const t = await chrome.tabs.get(id).catch(() => null);
+    if (t && t.id) return t;
+  }
+  const cfg = await getConfig();
+  const hosts = cfg.dwHosts.concat(await extraHosts());
+  const pats = hosts.map((h) => (h === 'localhost' || /^[0-9.]+$/.test(h) ? 'http://' + h + '/*' : 'https://' + h + '/*'));
+  const tabs = await chrome.tabs.query({ url: pats }).catch(() => []);
+  return tabs[0] || null;
+}
+async function handleSnapshot(from) {
+  const found = await findAiTab();
+  if (!found) return { ok: false, code: 'no_ai_tab' };
+  const inj = await ensureGptInjected(found.tab.id);
+  if (!inj || !inj.ok) return { ok: false, code: (inj && inj.code) || 'inject_failed' };
+  const inst = await getInstructions(found.siteId).catch(() => null);
+  if (!inst || !inst.instr) return { ok: false, code: 'no_instructions' };
+  let cap;
+  try {
+    cap = await withTimeout(chrome.tabs.sendMessage(found.tab.id, { type: 'gpt:snapshot', instr: inst.instr }, { frameId: 0 }), 15000, 'snapshot_timeout');
+  } catch (e) { return { ok: false, code: (e && e.code) || 'snapshot_timeout' }; }
+  if (!cap || !cap.ok || typeof cap.dom !== 'string') return { ok: false, code: (cap && cap.code) || 'capture_failed' };
+  const body = {
+    provider: found.siteId,
+    extVersion: EXT_VERSION,
+    instructions: { version: inst.instr.version, revision: inst.instr.revision, verified: !!inst.instr.verified, source: inst.source },
+    host: cap.host,
+    selectors: cap.selectors,
+    dom: cap.dom,
+    stats: cap.stats
+  };
+  const editor = await findEditorTab();
+  if (editor) {
+    try {
+      const up = await withTimeout(chrome.tabs.sendMessage(editor.id, { type: 'sw:uploadSnap', body: body }, { frameId: 0 }), 20000, 'upload_timeout');
+      if (up && up.ok && up.id) { dl('snapshot', { via: 'upload', id: up.id, provider: found.siteId, from: from }); return { ok: true, via: 'upload', id: up.id }; }
+    } catch (e) { /* fall back to download */ }
+  }
+  const id = 's' + Math.random().toString(36).slice(2, 10);
+  const json = JSON.stringify(Object.assign({ id: id, t: Date.now(), via: 'download' }, body));
+  dl('snapshot', { via: 'download', id: id, provider: found.siteId, from: from, bytes: json.length });
+  return { ok: true, via: 'download', id: id, filename: 'dw-snap-' + id + '.json', json: json };
+}
+
 // ---------- messages ----------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
@@ -494,6 +558,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true, diag: await diagSnapshot() };
       }
       case 'popup:diag': if (!fromExt) return { ok: false }; return { ok: true, diag: await diagSnapshot() };
+      case 'popup:snapshot': if (!fromExt) return { ok: false }; return handleSnapshot('popup');
+      case 'dw:snapshot': {
+        if (!sender.tab || sender.frameId !== 0 || !(await isDwHost(hostOf(sender.url)))) return { ok: false, code: 'not_active' };
+        return handleSnapshot('page');
+      }
       case 'dw:control': return control(sender, msg);
       case 'dw:state': return { ok: true, state: publicState(sender.tab && sender.tab.id) };
       case 'dw:setProvider': {
@@ -607,4 +676,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 });
 
 // test visibility only (config.allowDevOverride is false in the shipped build)
-self.__dw = { dl, diagSnapshot, injectIntoOpenDwTabs, iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab };
+self.__dw = { dl, diagSnapshot, handleSnapshot, findAiTab, injectIntoOpenDwTabs, iconLog, state: () => JSON.parse(JSON.stringify(S)), refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab };

@@ -129,7 +129,8 @@
       onUnpair: function () { send({ type: 'dw:control', action: 'unpair' }); },
       onOpenFile: function (id) { send({ type: 'dw:control', action: 'openFile', id: id }); },
       onToggle: function (on) { S.relay = !!on; chrome.storage.local.set({ relayEnabled: !!on }); },
-      onProvider: function (id) { if (DWX.providers.valid(id)) send({ type: 'dw:setProvider', provider: id }); }
+      onProvider: function (id) { if (DWX.providers.valid(id)) send({ type: 'dw:setProvider', provider: id }); },
+      onSnapshot: function () { return send({ type: 'dw:snapshot' }); }
     });
     chrome.storage.local.get('relayEnabled').then(function (d) { S.relay = d.relayEnabled !== false; if (S.panel) S.panel.setRelayChecked(S.relay); });
   }
@@ -234,9 +235,24 @@
     return out;
   }
   function files2(fs) { return (fs || []).map(function (f) { return { name: f.name, url: f.url, kind: f.kind, needsTab: !!f.needsTab }; }); }
-  chrome.runtime.onMessage.addListener(function (msg, sender) {
+  async function uploadSnapshot(body) {
+    var brand = '';
+    try { var sc = document.querySelector('script[data-brand]'); if (sc) brand = sc.getAttribute('data-brand') || ''; } catch (e) {}
+    function q(a) { return '/markup/?a=' + a + (brand ? '&brand=' + encodeURIComponent(brand) : ''); }
+    try {
+      var st = await fetch(q('status'), { credentials: 'same-origin', cache: 'no-store' });
+      var sj = st && st.ok ? await st.json() : null;
+      if (!sj || !sj.show || !sj.csrf) return { ok: false, code: 'not_editor' };
+      var r = await fetch(q('snapshot'), { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'X-DW-Markup': '1', 'X-DW-CSRF': sj.csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      var j = await r.json().catch(function () { return null; });
+      if (j && j.ok && j.id) return { ok: true, id: String(j.id).slice(0, 16), via: 'upload' };
+      return { ok: false, code: (j && (j.error_code || j.error)) || ('http_' + r.status) };
+    } catch (e) { return { ok: false, code: 'upload_failed' }; }
+  }
+  chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (sender.id !== chrome.runtime.id || !msg) return;
     if (msg.type === 'sw:state') { S.state = msg.state; applyState(); return; }
+    if (msg.type === 'sw:uploadSnap') { uploadSnapshot(msg.body).then(sendResponse); return true; }
     if (msg.type !== 'sw:event') return;
     var e = msg.event || {};
     var P = S.panel;
@@ -283,6 +299,8 @@
       } else if (d.type === 'dw-ext-diag') {
         // The editor asks for a snapshot of the relay (step names, codes and timings only; no notes, replies or screenshots).
         send({ type: 'dw:diag' }).then(function (r) { toPage('dw-ext-diag-result', { ok: !!(r && r.ok), code: r && r.code, ext: r && r.diag ? r.diag : null, page: pageLog(), active: S.active, extVersion: EXT_VERSION }); });
+      } else if (d.type === 'dw-ext-snapshot') {
+        send({ type: 'dw:snapshot' }).then(function (r) { toPage('dw-ext-snapshot-result', r && r.ok ? { ok: true, id: r.id, via: r.via, filename: r.filename, json: r.json } : { ok: false, code: (r && r.code) || 'no_answer' }); });
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
       else if (d.type === 'dw-ext-provider' && S.active && DWX.providers.valid(d.provider)) send({ type: 'dw:setProvider', provider: d.provider });
       else if (d.type === 'dw-ext-control' && d.action === 'stop') localStop();

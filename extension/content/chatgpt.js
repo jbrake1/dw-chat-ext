@@ -33,6 +33,11 @@
       case 'gpt:run':
         if (current) { sendResponse({ ok: false, code: 'busy' }); break; }
         start(msg); sendResponse({ ok: true }); break;
+      case 'gpt:snapshot':
+        // Read-only: never starts, stops or changes a job. Structure and selector counts only.
+        try { sendResponse(DWX.pageSnapshot(window, msg.instr || {})); }
+        catch (e) { sendResponse({ ok: false, code: 'snapshot_failed' }); }
+        break;
       case 'gpt:control':
         if (!current || current.jobId !== msg.jobId) { sendResponse({ ok: false }); break; }
         if (msg.action === 'stop') current.ctl.stop();
