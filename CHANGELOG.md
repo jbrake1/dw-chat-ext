@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.16 — 2026-11-27
+
+- **Always-visible Recover reply button.** v0.1.15 put Recover reply from chat URL in the chat header and as a small link in the first-send note box, and opened a form after a stream timeout — but those were easy to miss, and the header only appeared after the chat panel was already open. v0.1.16 adds a clearly labeled **Recover reply** button to the main Suggest an edit toolbar, visible from the first open, with no session, pairing or timeout required. Clicking it opens the paste-URL form immediately. If no AI tab is paired yet, the form tells you to open a Gemini (or ChatGPT, Grok or Claude) tab and click Pair this tab, then continues so you can paste the link and Recover. The note box control is now a full-width button, and the chat-header control remounts correctly if the chat panel was closed.
+
+
 ## v0.1.15 — 2026-11-27
 
 - **Gemini `no_stream` when a reply was already in the chat.** A send that attached files and was accepted could still end with "Gemini did not start answering" after the stream timeout, even though the reply was visible in the Gemini tab. The first `chunk1` logged at send time was an empty snapshot, not the first token. If the editor page was reloaded mid-stream, restore kept that empty snapshot and did not reread the Gemini tab while the job was still running. v0.1.15 rescans the job's own chat on `no_stream` / `no_reply` / `done_timeout` (and on restore when the stored text is empty), walks shadow roots the document observer cannot see, and treats a found reply like a normal completion (code blocks and generated file chips included) so the usual preview with Publish/Discard is staged.

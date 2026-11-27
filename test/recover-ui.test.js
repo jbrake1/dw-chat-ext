@@ -63,3 +63,65 @@ test('v0.1.15: a recovered done event stages the usual /files preview with Publi
   const pub = shadowAll(win, '[data-act=publish]')[0];
   assert.ok(pub, 'Publish is on the recovered preview');
 });
+
+function openEditor(win) {
+  const host = win.document.getElementById('dw-markup-root');
+  const fab = host && host.shadowRoot && host.shadowRoot.querySelector('button.fab');
+  assert.ok(fab, 'Suggest an edit button is on the page');
+  fab.click();
+  return host.shadowRoot;
+}
+
+test('v0.1.16: Recover reply is on the main toolbar from the first open, with no session, pairing or timeout', async () => {
+  const { win, posted } = editor();
+  await sleep(50);
+  const sr = openEditor(win);
+  const barBtn = sr.querySelector('[data-act=recover-bar]');
+  assert.ok(barBtn, 'toolbar Recover reply is present on first open');
+  assert.match(barBtn.textContent, /Recover reply/);
+  const noteBtn = sr.querySelector('[data-act=recover-chat]');
+  assert.ok(noteBtn, 'note box Recover entry point renders on first open');
+  assert.equal(noteBtn.textContent, 'Recover reply from chat URL');
+  assert.equal(noteBtn.className, 'recbtn');
+  assert.ok(!shadowAll(win, '[data-role=feed-recover]')[0], 'form is not open until Recover is clicked');
+  barBtn.click();
+  const box = shadowAll(win, '[data-role=feed-recover]')[0];
+  assert.ok(box, 'clicking Recover reply opens the paste-URL form');
+  assert.equal(box.hidden, false);
+  const headerBtn = shadowAll(win, '[data-act=recover]')[0];
+  assert.ok(headerBtn, 'chat header Recover entry point renders once the form is opened');
+  assert.equal(headerBtn.textContent, 'Recover reply from chat URL');
+  const msg = shadowAll(win, '[data-role=recover-msg]')[0];
+  assert.ok(msg);
+  send(win, { type: 'dw-ext-ready', paired: false, editor: true });
+  await sleep(20);
+  assert.match(msg.textContent, /Pair this tab/);
+  send(win, { type: 'dw-ext-ready', paired: true, editor: true });
+  await sleep(20);
+  assert.match(msg.textContent, /Paired\. Paste the chat link/);
+  const input = shadowAll(win, '[data-role=recover-url]')[0];
+  input.value = 'https://gemini.google.com/app/abcDEF123?utm_source=share';
+  shadowAll(win, '[data-act=recover-go]')[0].click();
+  await sleep(40);
+  const rec = posted.find((p) => p.type === 'dw-ext-recover');
+  assert.ok(rec);
+  assert.equal(rec.url, 'https://gemini.google.com/app/abcDEF123?utm_source=share');
+});
+
+test('v0.1.16: closing the chat feed and clicking Recover remounts the header button and the form', async () => {
+  const { win } = editor();
+  await sleep(50);
+  send(win, { type: 'dw-ext-ready', paired: true });
+  send(win, { type: 'dw-ext-error', jobId: 'j1', step: 'stream', code: 'no_stream', sent: true });
+  await sleep(40);
+  assert.ok(shadowAll(win, '[data-act=recover]')[0]);
+  const close = shadowAll(win, '[data-act=close]')[0];
+  assert.ok(close); close.click();
+  assert.ok(!win.document.getElementById('dw-ext-feed'), 'feed was closed');
+  const sr = openEditor(win);
+  sr.querySelector('[data-act=recover-bar]').click();
+  const box = shadowAll(win, '[data-role=feed-recover]')[0];
+  assert.ok(box && box.hidden === false, 'form remounts on the new feed');
+  const headerBtn = shadowAll(win, '[data-act=recover]')[0];
+  assert.ok(headerBtn && headerBtn.textContent === 'Recover reply from chat URL');
+});

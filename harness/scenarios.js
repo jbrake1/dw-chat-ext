@@ -1290,4 +1290,67 @@ scenarios['recover-chat-url'] = async (env) => {
   return c.steps;
 };
 
+
+// v0.1.16: Recover reply is on the main toolbar from the first open (desktop width).
+// Screenshots: toolbar + note box before click, then the paste-URL form after click.
+scenarios['recover-toolbar'] = async (env) => {
+  const c = new L.Checks();
+  const shotDir = path.join(root, 'shots');
+  fs.mkdirSync(shotDir, { recursive: true });
+  await env.login();
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const dw = await env.ctx.newPage();
+  await dw.setViewportSize({ width: 1280, height: 800 });
+  await dw.goto(env.dwUrl + '/editor.html'); env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root', { state: 'attached', timeout: 15000 });
+  await L.sleep(800);
+  await dw.evaluate(() => {
+    const r = document.getElementById('dw-markup-root');
+    const fab = r && r.shadowRoot && r.shadowRoot.querySelector('button.fab');
+    if (fab) fab.click();
+  });
+  const first = await L.waitFor(async () => dw.evaluate(() => {
+    const r = document.getElementById('dw-markup-root');
+    const sr = r && r.shadowRoot;
+    if (!sr) return null;
+    const bar = sr.querySelector('[data-act=recover-bar]');
+    const note = sr.querySelector('[data-act=recover-chat]');
+    const vp = { w: window.innerWidth, h: window.innerHeight };
+    if (!bar || !note) return null;
+    const br = bar.getBoundingClientRect(), nr = note.getBoundingClientRect();
+    const visible = (el) => el.width > 0 && el.height > 0 && el.bottom > 0 && el.top < vp.h && el.right > 0 && el.left < vp.w;
+    return {
+      barText: (bar.textContent || '').replace(/\s+/g, ' ').trim(),
+      noteText: (note.textContent || '').trim(),
+      barVisible: visible(br),
+      noteVisible: visible(nr),
+      feedOpen: !!document.getElementById('dw-ext-feed'),
+      viewport: vp
+    };
+  }), 10000, 'Recover reply on first open');
+  c.check('toolbar_recover_visible_on_first_open', !!(first && first.barVisible && /Recover reply/.test(first.barText) && first.viewport.w === 1280 && first.viewport.h === 800), first);
+  c.check('note_box_recover_renders', !!(first && first.noteVisible && first.noteText === 'Recover reply from chat URL'), first);
+  c.check('form_not_open_until_click', !!(first && first.feedOpen === false), first);
+  const shot1 = path.join(shotDir, 'recover-toolbar-first-open.png');
+  await dw.screenshot({ path: shot1, fullPage: false });
+  c.info('screenshot_recover_toolbar_first_open', true, shot1);
+  await dw.evaluate(() => document.getElementById('dw-markup-root').shadowRoot.querySelector('[data-act=recover-bar]').click());
+  const opened = await L.waitFor(async () => dw.evaluate(() => {
+    const sr = document.getElementById('dw-ext-feed') && document.getElementById('dw-ext-feed').shadowRoot;
+    if (!sr) return null;
+    const box = sr.querySelector('[data-role=feed-recover]');
+    const header = sr.querySelector('[data-act=recover]');
+    const msg = sr.querySelector('[data-role=recover-msg]');
+    if (!box || box.hidden) return null;
+    return { header: header && header.textContent, msg: msg && msg.textContent, input: !!sr.querySelector('[data-role=recover-url]') };
+  }), 10000, 'paste-URL form');
+  c.check('toolbar_click_opens_form', !!(opened && opened.input), opened);
+  c.check('header_recover_renders', !!(opened && opened.header === 'Recover reply from chat URL'), opened);
+  c.check('unpaired_guides_to_pair', !!(opened && /Pair this tab/.test(opened.msg || '')), opened);
+  const shot2 = path.join(shotDir, 'recover-toolbar-form.png');
+  await dw.screenshot({ path: shot2, fullPage: false });
+  c.info('screenshot_recover_toolbar_form', true, shot2);
+  return c.steps;
+};
+
 module.exports.scenarios = scenarios;

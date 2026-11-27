@@ -68,8 +68,8 @@ test('sw.js: persisted relay log, diagnostics snapshot, injection into already-o
   assert.ok(/case 'popup:diag': if \(!fromExt\) return/.test(s));
 });
 
-test('popup has a Copy diagnostics button; manifest is 0.1.15', () => {
+test('popup has a Copy diagnostics button; manifest is 0.1.16', () => {
   assert.ok(read('extension/popup/popup.html').includes('id="diag"'));
   assert.ok(read('extension/popup/popup.js').includes('popup:diag'));
-  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.15');
+  assert.strictEqual(JSON.parse(read('extension/manifest.json')).version, '0.1.16');
 });

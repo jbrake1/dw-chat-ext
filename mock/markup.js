@@ -236,6 +236,7 @@
     if (st && !st.editor) XT.active = false;
     XT.paired = !!(st && st.paired);
     xtPaintStatus();
+    xtRecoverGuide(true);
     if (XT.feed && XT.job === null) { var fs = XT.feed.getAttribute('data-state'); xtFollowShow(!!XT.active && (fs === 'done' || fs === 'stopped' || fs === 'error')); }   // the follow-up box follows the extension's state
   }
   function xtStartDetect() {
@@ -426,7 +427,7 @@
     var done = false;
     function finish(ext) {
       if (done) return; done = true; XT.diagWait = null;
-      var out = { page: { v: 'markup-0.1.15', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
+      var out = { page: { v: 'markup-0.1.16', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
       var text = JSON.stringify(out, null, 1);
       function fallback() {
         var host = XT.feedScroll || XT.box;
@@ -462,6 +463,7 @@
   }
   // v0.1.14: Copy diagnostics and Send page snapshot live in the chat window header (always, not only after an error).
   // v0.1.15: Recover reply from chat URL is there too (and on the first-send note box).
+  // v0.1.16: those entry points remount after the feed is closed; a Recover reply button also sits on the main toolbar from first open.
   function xtFeedToolsMount() {
     if (!XT.feed || XT.feedTools) return;
     var hd = XT.feed.querySelector('.hd'); if (!hd) return;
@@ -495,12 +497,31 @@
     if (XT.feedFollow && XT.feedFollow.parentNode) XT.feed.insertBefore(XT.recoverBox, XT.feedFollow);
     else XT.feed.appendChild(XT.recoverBox);
   }
+  function xtRecoverGuide(fromStatus) {
+    if (!XT.recoverMsg || !XT.recoverBox || XT.recoverBox.hidden) return;
+    var t = XT.recoverMsg.textContent || '';
+    var guiding = /Pair this tab|not active on this page|Paired\. Paste|Checking the extension/.test(t);
+    if (fromStatus && t && !guiding) return;
+    if (!XT.active && !XT.gotStatus && !XT.missing) {
+      if (!fromStatus) XT.recoverMsg.textContent = 'Checking the extension…';
+      return;
+    }
+    if (XT.missing || !XT.active) {
+      XT.recoverMsg.textContent = 'The extension is not active on this page. Reload the page, then paste the chat link and click Recover.';
+      return;
+    }
+    if (!XT.paired) {
+      XT.recoverMsg.textContent = 'Open a ' + xtAiName(XT.ai) + ' tab and click Pair this tab in the extension popup, then paste the chat link and click Recover.';
+      return;
+    }
+    if (fromStatus || guiding) XT.recoverMsg.textContent = 'Paired. Paste the chat link and click Recover.';
+  }
   function xtRecoverOpen(toggle) {
     xtFeedMount(); xtFeedToolsMount(); xtRecoverMount();
     if (!XT.recoverBox) return;
     var on = toggle ? !!XT.recoverBox.hidden : true;
     XT.recoverBox.hidden = !on;
-    if (on) { try { XT.recoverInput.focus(); } catch (e) {} }
+    if (on) { xtRecoverGuide(false); try { XT.recoverInput.focus(); } catch (e) {} }
   }
   function xtRecoverSend() {
     xtRecoverMount();
@@ -550,7 +571,7 @@
       return;
     }
     if (d.source !== 'dw-ext') return;
-    if (d.type === 'dw-ext-ready') { XT.active = true; XT.paired = !!d.paired; if (!XT.acked) { XT.acked = true; xtHello(); } xtAskReplay(); }
+    if (d.type === 'dw-ext-ready') { XT.active = true; XT.paired = !!d.paired; if (!XT.acked) { XT.acked = true; xtHello(); } xtAskReplay(); xtRecoverGuide(true); }
     else if (d.type === 'dw-ext-status') { xtApplyStatus(xtParseStatus(d)); xtAskReplay(); }
     else if (d.type === 'dw-ext-restore') { xtRestoreFeed(d); }
     else if (d.type === 'dw-ext-inactive') { XT.active = false; XT.acked = false; xtApplyStatus({ extVersion: (XT.last && XT.last.extVersion) || '', paired: false, ai: null, revision: null, editor: false }); }
@@ -1141,7 +1162,7 @@
     xtLog('feed_closed');
     if (XT.feedThumbUrl) { try { URL.revokeObjectURL(XT.feedThumbUrl); } catch (e) {} XT.feedThumbUrl = null; }
     if (XT.feedHost && XT.feedHost.parentNode) XT.feedHost.parentNode.removeChild(XT.feedHost);
-    XT.feedHost = XT.feedRoot = XT.feed = XT.feedScroll = XT.feedFoot = XT.feedReply = XT.feedSteps = XT.feedFollow = XT.followText = XT.followInput = null;
+    XT.feedHost = XT.feedRoot = XT.feed = XT.feedScroll = XT.feedFoot = XT.feedReply = XT.feedSteps = XT.feedFollow = XT.followText = XT.followInput = XT.feedTools = XT.recoverBox = XT.recoverInput = XT.recoverGo = XT.recoverMsg = null;
   }
   function xtClearWait() { if (XT.waitTimer) { clearTimeout(XT.waitTimer); XT.waitTimer = null; } }
   function xtHeardRelay() { XT.heard = true; xtClearWait(); }
@@ -2226,6 +2247,7 @@
     '.bar button:hover{background:#eef2ec}.bar button.on{background:#1f4d2b;color:#fff}',
     '.bar .sep{width:1px;height:24px;background:#dde3db;margin:0 3px}',
     '.bar .send{background:#d4572a;color:#fff;font-weight:600}.bar .send:hover{background:#b8451c}',
+    '.bar .recover{background:#1f4a6e;color:#fff;font-weight:600}.bar .recover:hover{background:#163a58}',
     '.notebox{position:fixed;right:16px;bottom:16px;z-index:2147483647;width:min(340px,calc(100vw - 32px));background:#fff;border-radius:12px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.28)}',
     '.notebox label{display:block;font-size:12px;font-weight:600;color:#4a5a4d;margin:0 0 5px}',
     '.notebox textarea{width:100%;height:92px;resize:vertical;border:1px solid #c8d1c6;border-radius:8px;padding:8px;font-size:14px;color:#1d2a20}',
@@ -2238,6 +2260,7 @@
     '.att-btn{border:1px dashed #8aa38f;background:#f4f8f3;color:#1f4d2b;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;width:100%}.att-btn:hover{background:#e8f0e6}',
     '.notebox.drag{outline:3px dashed #1f4d2b;outline-offset:2px;background:#f2f8f1}',
     '.newsess{display:block;margin:8px 0 0 auto;border:0;background:transparent;color:#5b6b5e;font-size:11px;text-decoration:underline;cursor:pointer;padding:2px 0}',
+    '.recbtn{display:block;width:100%;margin:8px 0 0;border:0;border-radius:8px;padding:8px 10px;background:#1f4a6e;color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-align:center}.recbtn:hover{background:#163a58}',
     '.linkbtn{border:0;background:transparent;color:#1f4d2b;font-weight:600;font-size:11px;text-decoration:underline;cursor:pointer;padding:0}',
     '.att-hint{margin:5px 0 0;font-size:11px;line-height:1.35;color:#4a5a4d}',
     '.att-msg{margin:4px 0 0;font-size:11px;color:#b3261e}.att-msg:empty{display:none}',
@@ -2251,7 +2274,7 @@
     '.txt{position:fixed;z-index:2147483647;font-size:16px;font-weight:700;color:#e0262b;border:2px dashed #e0262b;background:rgba(255,255,255,.9);padding:2px 5px;border-radius:4px;min-width:140px;outline:none}',
     '.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;background:#1d2a20;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;box-shadow:0 4px 14px rgba(0,0,0,.3)}',
     '.busy{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.45);font-size:15px;font-weight:600;color:#1d2a20}',
-    '@media (max-width:600px){.bar{left:10px;right:10px;transform:none;justify-content:center;max-width:none}.bar .lbl{display:none}.bar button{min-width:38px;min-height:38px}.bar .send .lbl{display:inline}}',
+    '@media (max-width:600px){.bar{left:10px;right:10px;transform:none;justify-content:center;max-width:none}.bar .lbl{display:none}.bar button{min-width:38px;min-height:38px}.bar .send .lbl{display:inline}.bar .recover .lbl{display:inline}}',
   ].join('\n');
 
   // toolbar button: icon plus a label that narrow screens hide (aria-label keeps the name)
@@ -2327,9 +2350,11 @@
       } else {
       var cancel = btn({ 'data-act': 'cancel', title: 'Cancel' }, '\u2715', 'Cancel');
       cancel.addEventListener('click', stop);
+      var recBar = btn({ class: 'recover', 'data-act': 'recover-bar', title: 'Open an existing AI chat from its link and stage the latest reply as a preview. The extension only reads the chat; it does not send, delete, rename or share it. If no AI tab is paired yet, this opens the form and tells you how to pair.' }, '\u21BB', 'Recover reply');
+      recBar.addEventListener('click', function () { xtRecoverOpen(false); });
       var send = btn({ class: 'send', 'data-act': 'send', title: 'Send' }, '\u27A4', 'Send');
       send.addEventListener('click', submit);
-      ui.bar.appendChild(cancel); ui.bar.appendChild(send);
+      ui.bar.appendChild(cancel); ui.bar.appendChild(recBar); ui.bar.appendChild(send);
       add(ui.bar);
       ui.note = el('div', { class: 'notebox' });
       ui.note.appendChild(el('label', { for: 'dw-mk-note' }, 'What should change?'));
@@ -2370,8 +2395,8 @@
       var ns = el('button', { type: 'button', class: 'newsess', 'data-act': 'new-session', title: 'Clear this note, markup, attached files and AI chat, and start over' }, 'New session');
       ns.addEventListener('click', function () { xsNewSession(); });
       ui.note.appendChild(ns);
-      var rec = el('button', { type: 'button', class: 'newsess', 'data-act': 'recover-chat', title: 'Open an existing AI chat from its link and stage the latest reply as a preview. The extension only reads the chat; it does not send, delete, rename or share it.' }, 'Recover reply from chat URL');
-      rec.addEventListener('click', function () { xtFeedMount(); xtRecoverOpen(false); });
+      var rec = el('button', { type: 'button', class: 'recbtn', 'data-act': 'recover-chat', title: 'Open an existing AI chat from its link and stage the latest reply as a preview. The extension only reads the chat; it does not send, delete, rename or share it. If no AI tab is paired yet, this opens the form and tells you how to pair.' }, 'Recover reply from chat URL');
+      rec.addEventListener('click', function () { xtRecoverOpen(false); });
       ui.note.appendChild(rec);
       add(ui.note);
       ui.extStatus = null;
