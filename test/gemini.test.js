@@ -224,7 +224,7 @@ test('provider registry: ChatGPT + Gemini, hosts match config, labels and messag
     assert.ok(fs.existsSync(path.join(root, 'extension', p.instructions)), p.instructions);
     assert.ok(p.newChatUrl.startsWith('https://' + p.hosts[0] + '/'));
   }
-  assert.equal(R.message('gemini', 'no_stream'), 'Gemini did not start answering.');
+  assert.match(R.message('gemini', 'no_stream'), /Gemini did not start answering/);
   assert.equal(R.message('chatgpt', 'not_logged_in'), 'ChatGPT tab is not signed in.');
   assert.equal(R.message('gemini', 'something_unknown'), null);
   for (const f of ['content_scripts', 'background']) assert.ok(m[f]);

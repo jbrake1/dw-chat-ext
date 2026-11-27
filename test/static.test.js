@@ -48,9 +48,10 @@ test('extension uses no timer polling on the DOM and no eval', () => {
     const s = fs.readFileSync(f, 'utf8');
     assert.equal(/\beval\s*\(|new Function\(/.test(s), false, f);
   }
-  // setInterval is allowed in exactly one place: the 20 s service-worker keepalive in the chat content script
+  // setInterval is allowed in two places: the 20 s service-worker keepalive in the chat content script, and the
+  // 1 s stream poll in the runner (shadow-root mutations are invisible to a document MutationObserver).
   const hits = walk(path.join(root, 'extension')).filter((x) => x.endsWith('.js')).filter((f) => /setInterval\(/.test(fs.readFileSync(f, 'utf8')));
-  assert.deepEqual(hits.map((h) => path.relative(root, h)), ['extension/content/chatgpt.js']);
+  assert.deepEqual(hits.map((h) => path.relative(root, h)).sort(), ['extension/content/chatgpt.js', 'extension/lib/runner.js']);
 });
 
 test('bundled instructions are verified (live, 2026-11-22), sealed, and the seal matches', () => {

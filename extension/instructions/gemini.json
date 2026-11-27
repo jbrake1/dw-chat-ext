@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "site": "gemini",
-  "revision": 4,
-  "version": "2026.11.24-4",
+  "revision": 5,
+  "version": "2026.11.27-5",
   "minExtVersion": "0.1.12",
   "verified": false,
-  "notes": "UNVERIFIED against a live signed-in gemini.google.com (built from public knowledge of its web DOM plus owner snapshot s2b34afff, selectors only, and the owner's v0.1.9 retest). rev 2: Upload & tools menu + page hook (content/ai-hook.js), drop and paste fallbacks, growth-based chip confirmation, inlineFallback. rev 3: steps.blocks.markdownText reads the reply as markdown (code blocks as fences, raw HTML runs fenced, whole documents become blocks). Chip and code-block names are still unverified. rev 4 (v0.1.12): steps.files.generated reads files Gemini made with code (download chips under the reply) once the reply is done: chip elements by selector or by a whole-text file name, the bytes from the chip's link or, through the page hook, from the chip's own download button (the download is caught, not saved to disk). Chip markup is unverified against a live reply; needs extension 0.1.12 (older extensions keep their bundled rev).",
+  "notes": "UNVERIFIED against a live signed-in gemini.google.com (built from public knowledge of its web DOM plus owner snapshot s2b34afff, selectors only, and the owner's v0.1.9 retest). rev 2: Upload & tools menu + page hook (content/ai-hook.js), drop and paste fallbacks, growth-based chip confirmation, inlineFallback. rev 3: steps.blocks.markdownText reads the reply as markdown (code blocks as fences, raw HTML runs fenced, whole documents become blocks). Chip and code-block names are still unverified. rev 4 (v0.1.12): steps.files.generated reads files Gemini made with code (download chips under the reply) once the reply is done. Chip markup is unverified against a live reply; needs extension 0.1.12. rev 5 (v0.1.15): broader assistant and stop selectors (response-container, aria-label Gemini response, stop-button / Stop generating) so a reply the older list missed can still be read; the extension also rescans on no_stream and can recover from a chat URL. Every selector can be overridden by publishing a new revision of this file.",
   "match": {
     "hosts": [
       "gemini.google.com"
@@ -165,8 +165,12 @@
       "selectors": [
         "button[aria-label='Stop response']",
         "button.send-button.stop",
+        "button[data-test-id='stop-button']",
+        "button.stop-button",
+        "button[aria-label*='Stop generating' i]",
         "button[aria-label^='Stop' i][aria-label*='respon' i]",
-        "button[aria-label^='Stop' i]"
+        "button[aria-label^='Stop' i]",
+        "button[aria-label*='Stop' i]"
       ]
     },
     "assistantMessage": {
@@ -174,14 +178,25 @@
         "model-response",
         "[data-test-id='model-response']",
         "div.model-response-text",
-        "message-content.model-response-text"
+        "message-content.model-response-text",
+        "response-container",
+        ".response-container",
+        ".presented-response-container",
+        ".response-content",
+        ".model-response",
+        "[aria-label='Gemini response']",
+        "[aria-label*='Gemini response' i]",
+        "chat-turn model-response",
+        "[data-test-id='conversation-turn'] model-response"
       ],
       "textSelectors": [
         "message-content .markdown",
         ".markdown.markdown-main-panel",
         ".model-response-text .markdown",
         "message-content",
-        ".markdown"
+        ".markdown",
+        ".response-content",
+        ".model-response-text"
       ],
       "pick": "last"
     },
@@ -346,7 +361,7 @@
   },
   "integrity": {
     "alg": "sha256",
-    "hash": "8aa21d7971386a7ddd9d525c38ed5277ae026d2ca76fad94abe7523fe347dc1c",
+    "hash": "c4fb62e1364c8fe8237d3f46a22d9afa73782f554c8cfcea24542972f4536084",
     "sig": "",
     "keyId": ""
   }

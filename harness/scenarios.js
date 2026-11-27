@@ -1239,4 +1239,55 @@ for (const site of ['grok', 'claude']) {
   };
 }
 
+
+// v0.1.15: Recover reply from chat URL. A Gemini chat already has a finished page; the editor opens that
+// link (tracking query is stripped), rereads the latest reply, and stages the usual Publish preview. Read only.
+scenarios['recover-chat-url'] = async (env) => {
+  const c = new L.Checks();
+  await env.login();
+  await env.sw.evaluate(() => self.__dw.setProvider('gemini'));
+  const gem = await env.ctx.newPage();
+  await gem.goto(env.mock.gemUrl + '/app/tokr15recover?seed=page');
+  await L.pair(env.sw, 'http://127.0.0.2/*');
+  const dw = await env.ctx.newPage(); await dw.goto(env.dwUrl + '/editor.html'); env.dwPage = dw;
+  await dw.waitForSelector('#dw-markup-root', { state: 'attached', timeout: 15000 });
+  await L.sleep(800);
+  await dw.evaluate(() => {
+    const r = document.getElementById('dw-markup-root');
+    const fab = r && r.shadowRoot && r.shadowRoot.querySelector('button.fab');
+    if (fab) fab.click();
+  });
+  await L.waitFor(async () => dw.evaluate(() => {
+    const r = document.getElementById('dw-markup-root');
+    return !!(r && r.shadowRoot && r.shadowRoot.querySelector('[data-act=recover-chat]'));
+  }), 10000, 'recover link in the note box');
+  await dw.evaluate(() => document.getElementById('dw-markup-root').shadowRoot.querySelector('[data-act=recover-chat]').click());
+  const url = env.mock.gemUrl + '/app/tokr15recover?utm_source=share&foo=1';
+  await L.waitFor(async () => dw.evaluate(() => {
+    const sr = document.getElementById('dw-ext-feed') && document.getElementById('dw-ext-feed').shadowRoot;
+    return !!(sr && sr.querySelector('[data-role=recover-url]'));
+  }), 10000, 'recover form');
+  await dw.evaluate((u) => {
+    const sr = document.getElementById('dw-ext-feed').shadowRoot;
+    const input = sr.querySelector('[data-role=recover-url]');
+    if (input) input.value = u;
+    const go = sr.querySelector('[data-act=recover-go]');
+    if (go) go.click();
+  }, url);
+  const out = await L.waitFor(async () => dw.evaluate(() => {
+    const sr = document.getElementById('dw-ext-feed') && document.getElementById('dw-ext-feed').shadowRoot;
+    if (!sr) return null;
+    const reply = sr.querySelector('[data-role=reply][data-done]');
+    const err = sr.querySelector('[data-role=recover-msg]');
+    const pub = document.querySelector('#dw-ext-actions') && document.querySelector('#dw-ext-actions').shadowRoot && document.querySelector('#dw-ext-actions').shadowRoot.querySelector('[data-act=publish]');
+    if (pub) return { staged: true, done: reply && reply.getAttribute('data-done'), text: reply && reply.textContent, publish: true };
+    if (err && /Could not recover|not look like|No reply/.test(err.textContent || '')) return { error: err.textContent };
+    return null;
+  }), 40000, 'recovered preview').catch((e) => ({ error: String(e) }));
+  c.check('recovered_reply_staged', !!(out && out.staged && out.publish && /TOK-R15/.test(out.text || '')), out);
+  const g = await gem.evaluate(() => ({ received: (window.__received || []).length, newChat: window.__newChat || 0, href: location.href }));
+  c.check('chat_was_only_read', g.received === 0 && g.newChat === 0 && /\/app\/tokr15recover/.test(g.href), g);
+  return c.steps;
+};
+
 module.exports.scenarios = scenarios;

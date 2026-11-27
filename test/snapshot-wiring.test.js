@@ -5,9 +5,9 @@ const fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(root, p === 'server/markup/markup.js' && !fs.existsSync(path.join(root, p)) ? 'mock/markup.js' : p), 'utf8');   // the public repo keeps a copy in mock/
 
-test('extension 0.1.14: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
+test('extension 0.1.15: snapshot is a side path and does not use /_dw/ext/report or /_dw/ext/files', () => {
   const m = JSON.parse(read('extension/manifest.json'));
-  assert.equal(m.version, '0.1.14');
+  assert.equal(m.version, '0.1.15');
   assert.ok(m.content_scripts[1].js.includes('lib/snapshot.js'));
   assert.ok(!m.content_scripts[0].js.includes('lib/snapshot.js'), 'snapshot.js is not injected on editor pages');
   const sw = read('extension/background/sw.js');

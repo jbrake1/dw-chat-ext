@@ -41,14 +41,29 @@
         break;
       case 'gpt:peek':
         // v0.1.11: re-read the last assistant reply (and its code blocks) after the DW page was reloaded.
-        // Read-only: never starts, stops or changes a job, and never sends anything in the composer.
+        // v0.1.15: optionally harvest generated-file chips the same way a finished job does (msg.assets !== false).
+        // Read-only of the chat itself: never starts, stops, deletes, renames or shares a chat, and never types in the composer.
         try {
           var instr = msg.instr || {};
           var n = (DWX.countMessages && DWX.countMessages(document, instr)) || 0;
           var baseline = Math.max(0, n - 1);
           var st = DWX.readState(window, document, instr, baseline, null);
           var blocks = DWX.readBlocks(window, document, instr, baseline) || [];
-          sendResponse({ ok: !!(st && (st.text || (blocks && blocks.length))), text: (st && st.text) || '', files: (st && st.files) || [], blocks: blocks });
+          var base = { ok: !!(st && (st.text || (blocks && blocks.length))), text: (st && st.text) || '', files: (st && st.files) || [], blocks: blocks };
+          if (msg.assets === false || !DWX.collectAssets) { sendResponse(base); break; }
+          var settled = false;
+          var cap = ((instr.steps && instr.steps.files && instr.steps.files.generated && instr.steps.files.generated.timeoutMs) || 20000) + 2000;
+          var finish = function (r) {
+            if (settled) return; settled = true;
+            r = r || { assets: [], missed: [], tags: 0 };
+            base.assets = r.assets || [];
+            if ((r.missed && r.missed.length) || r.tags) base.assetsMissed = { names: (r.missed || []).slice(0, 12).map(function (m) { return { name: String(m.name).slice(0, 120), why: String(m.why).slice(0, 20) }; }), tags: r.tags | 0 };
+            if (base.assets.length) base.ok = true;
+            sendResponse(base);
+          };
+          var tm = setTimeout(function () { finish(null); }, cap);
+          DWX.collectAssets(window, document, instr, baseline, { ensureHook: function () { return chrome.runtime.sendMessage({ type: 'gpt:hook' }).catch(function () { return null; }); } }).then(function (r) { clearTimeout(tm); finish(r); }, function () { clearTimeout(tm); finish(null); });
+          return true;
         } catch (e) { sendResponse({ ok: false, code: 'peek_failed' }); }
         break;
       case 'gpt:control':

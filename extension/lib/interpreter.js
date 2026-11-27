@@ -25,10 +25,41 @@
     return el.getClientRects().length > 0;
   }
 
+  // v0.1.15: chat UIs often put the transcript in a (sometimes closed) shadow root, while the composer
+  // stays in the light DOM. Light-DOM query first; if it misses, walk open and closed shadow roots.
+  function shadowOf(el) {
+    if (!el) return null;
+    try { if (el.shadowRoot) return el.shadowRoot; } catch (e) {}
+    try { if (typeof el.openOrClosedShadowRoot !== 'undefined' && el.openOrClosedShadowRoot) return el.openOrClosedShadowRoot; } catch (e2) {}
+    try {
+      if (typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot) return chrome.dom.openOrClosedShadowRoot(el) || null;
+    } catch (e3) {}
+    return null;
+  }
+  function queryAllDeep(rootNode, css, cap) {
+    var out = [], capN = cap || 4000;
+    if (!rootNode) return out;
+    function walk(root) {
+      if (!root || out.length >= capN) return;
+      var list = [];
+      try { list = root.querySelectorAll ? root.querySelectorAll(css) : []; } catch (e) { list = []; }
+      for (var i = 0; i < list.length && out.length < capN; i++) if (out.indexOf(list[i]) < 0) out.push(list[i]);
+      if (root.nodeType === 1) { var s0 = shadowOf(root); if (s0) walk(s0); }
+      var all = [];
+      try { all = root.querySelectorAll ? root.querySelectorAll('*') : []; } catch (e2) { return; }
+      for (var j = 0; j < all.length && out.length < capN; j++) {
+        var sh = shadowOf(all[j]);
+        if (sh) walk(sh);
+      }
+    }
+    walk(rootNode);
+    return out;
+  }
   function matchOne(rootNode, sel) {
     sel = normSel(sel);
     var list;
-    try { list = Array.prototype.slice.call(rootNode.querySelectorAll(sel.css)); } catch (e) { return []; }
+    try { list = Array.prototype.slice.call(rootNode.querySelectorAll(sel.css)); } catch (e) { list = []; }
+    if (!list.length) list = queryAllDeep(rootNode, sel.css);
     if (sel.textMatches) {
       var re;
       try { re = new RegExp(sel.textMatches, 'i'); } catch (e) { return []; }
@@ -709,7 +740,7 @@
   }
 
   return {
-    StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor,
+    StepError: StepError, normSel: normSel, matchOne: matchOne, resolve: resolve, resolveAll: resolveAll, waitFor: waitFor, queryAllDeep: queryAllDeep, shadowOf: shadowOf,
     isEnabled: isEnabled, setText: setText, fileFromDataUrl: fileFromDataUrl, attachFile: attachFile, replyMarkdown: replyMarkdown, inlineFilesText: inlineFilesText, growth: growth, clickSend: clickSend,
     readNotice: readNotice, waitUntil: waitUntil, safeClick: safeClick, blockedByGuard: blockedByGuard,
     readState: readState, detectLimit: detectLimit, limitMatch: limitMatch, limitWhen: limitWhen, readFiles: readFiles, readBlocks: readBlocks, BLOCK_LIM: BLOCK_LIM, countMessages: countMessages, urlInfo: urlInfo, textOf: textOf

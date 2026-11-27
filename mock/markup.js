@@ -426,7 +426,7 @@
     var done = false;
     function finish(ext) {
       if (done) return; done = true; XT.diagWait = null;
-      var out = { page: { v: 'markup-0.1.14', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
+      var out = { page: { v: 'markup-0.1.15', t: Date.now(), active: XT.active, paired: XT.paired, missing: XT.missing, ai: XT.ai, log: xtLogGet().slice(-60) }, ext: ext || { note: 'extension did not answer' } };
       var text = JSON.stringify(out, null, 1);
       function fallback() {
         var host = XT.feedScroll || XT.box;
@@ -461,6 +461,7 @@
     setTimeout(function () { if (XT.snapWait) XT.snapWait({ ok: false, code: 'no_answer' }); }, 20000);
   }
   // v0.1.14: Copy diagnostics and Send page snapshot live in the chat window header (always, not only after an error).
+  // v0.1.15: Recover reply from chat URL is there too (and on the first-send note box).
   function xtFeedToolsMount() {
     if (!XT.feed || XT.feedTools) return;
     var hd = XT.feed.querySelector('.hd'); if (!hd) return;
@@ -470,11 +471,60 @@
     var b = el('button', { type: 'button', 'data-act': 'snapshot', title: 'Capture a structure snapshot of the paired AI tab' }, 'Send page snapshot');
     var st = el('span', { 'data-role': 'snap-status' }, '');
     b.addEventListener('click', function () { xtSnapRun(st); });
-    XT.feedTools.appendChild(d); XT.feedTools.appendChild(b); XT.feedTools.appendChild(st);
+    var r = el('button', { type: 'button', 'data-act': 'recover', title: 'Open an existing AI chat from its link and stage the latest reply as a preview. The extension only reads the chat; it does not send, delete, rename or share it.' }, 'Recover reply from chat URL');
+    r.addEventListener('click', function () { xtRecoverOpen(true); });
+    XT.feedTools.appendChild(d); XT.feedTools.appendChild(b); XT.feedTools.appendChild(r); XT.feedTools.appendChild(st);
     hd.appendChild(XT.feedTools);
+    xtRecoverMount();
   }
   function xtDiagButton() { xtFeedToolsMount(); }
   function xtSnapButton() { xtFeedToolsMount(); }
+  function xtRecoverMount() {
+    if (!XT.feed || XT.recoverBox) return;
+    XT.recoverBox = el('div', { class: 'rec', 'data-role': 'feed-recover', hidden: 'hidden' });
+    XT.recoverBox.appendChild(el('div', { class: 'reclab' }, 'Paste a chat link (Gemini, ChatGPT, Grok or Claude). Tracking parameters are stripped. The extension opens that chat and stages the latest reply; it does not send a message, or delete, rename or share the chat.'));
+    var row = el('div', { class: 'recrow' });
+    XT.recoverInput = el('input', { type: 'url', 'data-role': 'recover-url', placeholder: 'https://gemini.google.com/app/…', 'aria-label': 'Chat URL' });
+    XT.recoverInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); xtRecoverSend(); } });
+    XT.recoverGo = el('button', { type: 'button', class: 'go', 'data-act': 'recover-go' }, 'Recover');
+    XT.recoverGo.addEventListener('click', function () { xtRecoverSend(); });
+    row.appendChild(XT.recoverInput); row.appendChild(XT.recoverGo);
+    XT.recoverBox.appendChild(row);
+    XT.recoverMsg = el('div', { class: 'recmsg', 'data-role': 'recover-msg', role: 'status' }, '');
+    XT.recoverBox.appendChild(XT.recoverMsg);
+    if (XT.feedFollow && XT.feedFollow.parentNode) XT.feed.insertBefore(XT.recoverBox, XT.feedFollow);
+    else XT.feed.appendChild(XT.recoverBox);
+  }
+  function xtRecoverOpen(toggle) {
+    xtFeedMount(); xtFeedToolsMount(); xtRecoverMount();
+    if (!XT.recoverBox) return;
+    var on = toggle ? !!XT.recoverBox.hidden : true;
+    XT.recoverBox.hidden = !on;
+    if (on) { try { XT.recoverInput.focus(); } catch (e) {} }
+  }
+  function xtRecoverSend() {
+    xtRecoverMount();
+    var url = XT.recoverInput ? String(XT.recoverInput.value || '').trim() : '';
+    if (!url) { if (XT.recoverMsg) XT.recoverMsg.textContent = 'Paste a chat link first.'; return; }
+    if (XT.recoverGo) XT.recoverGo.disabled = true;
+    if (XT.recoverMsg) XT.recoverMsg.textContent = 'Opening the chat and reading the latest reply…';
+    xtLog('recover_start', {});
+    xtPost('dw-ext-recover', { url: url });
+  }
+  function xtRecoverResult(d) {
+    if (XT.recoverGo) XT.recoverGo.disabled = false;
+    if (!d || !d.ok) {
+      var N = xtAiName(XT.ai);
+      var code = d && d.code;
+      var msg = { bad_url: 'That does not look like a chat link.', not_conversation: 'That link is not a chat the extension can open (share, search and settings links are skipped). Use a link that looks like gemini.google.com/app/… (or the equivalent for ChatGPT, Grok or Claude).', busy: N + ' is still answering. Wait until it finishes, or use Recover after it stops.', not_logged_in: N + ' tab is not signed in.', no_reply: 'No reply was found in that chat yet. Open the link, check the reply is visible, then try Recover again.', tab_open_failed: 'Could not open that chat in a ' + N + ' tab.', not_paired: 'No ' + N + ' tab is paired.', chat_tab_unreachable: 'Could not reach the ' + N + ' tab.', no_instructions: 'No instructions were loaded for ' + N + '.', ext_inactive: 'The extension is not active on this page. Reload the page and try again.', relay_off: 'The relay is switched off in the extension. Switch it on, then try again.', not_active: 'The extension is not active on this page. Reload the page and try again.', no_answer: 'The extension did not answer. Reload this page and try again.' }[code] || ('Could not recover the reply (' + String(code || 'error') + ').');
+      if (XT.recoverMsg) XT.recoverMsg.textContent = msg;
+      xtLog('recover_fail', { code: code || 'error' });
+      return;
+    }
+    if (XT.recoverMsg) XT.recoverMsg.textContent = d.running ? 'Found the reply in the open chat (it is still running).' : 'Recovered the latest reply. Staging a preview…';
+    xtLog('recover_ok', { running: !!d.running });
+    if (XT.recoverBox && !d.running) XT.recoverBox.hidden = true;
+  }
   // Send pressed but the extension is not running on this page (it was installed or updated after the page loaded).
   function xtNoRelay(note, blob) {
     xtAiUse();
@@ -490,9 +540,10 @@
   window.addEventListener('message', function (e) {
     if (e.source !== window || e.origin !== location.origin || !e.data || e.data.v !== 1) return;
     var d = e.data;
-    if (d.source === 'dw-ext' && typeof d.sid === 'string' && d.sid && d.sid !== XT.sid && /^dw-ext-(step|chunk|done|error|restore)$/.test(d.type)) return;   // v0.1.13: another editor session's reply
+    if (d.source === 'dw-ext' && typeof d.sid === 'string' && d.sid && d.sid !== XT.sid && /^dw-ext-(step|chunk|done|error|restore|recover-result)$/.test(d.type)) return;   // v0.1.13: another editor session's reply
     if (d.source === 'dw-ext' && d.type === 'dw-ext-diag-result') { if (XT.diagWait) XT.diagWait(d.ext ? { ext: d.ext, extPage: d.page, extVersion: d.extVersion, active: d.active } : null); return; }
     if (d.source === 'dw-ext' && d.type === 'dw-ext-snapshot-result') { if (XT.snapWait) XT.snapWait(d); return; }
+    if (d.source === 'dw-ext' && d.type === 'dw-ext-recover-result') { xtRecoverResult(d); return; }
     if (d.source === 'dw-ext') xtLogEv(d);
     if (d.source === 'dw-edit' && d.type === 'dw-ext-submit') {
       if (!XT.feed || !XT.feed.querySelector('[data-role=feed-user]')) xtFeedUser(d.note, d.screenshot);
@@ -942,6 +993,13 @@
     '.foot button.go{background:#2563eb;color:#fff;font-weight:600}',
     '.foot a{color:#93c5fd;font-size:12px;align-self:center}',
     '.fu{display:flex;flex-direction:column;gap:6px;padding:8px 9px;border-top:1px solid #2d3138;background:#181a1e}',
+    '.rec{display:flex;flex-direction:column;gap:6px;padding:8px 9px;border-top:1px solid #2d3138;background:#181a1e}',
+    '.rec[hidden]{display:none!important}',
+    '.reclab{font-size:11px;color:#c5c9ce;line-height:1.4}',
+    '.recrow{display:flex;gap:6px}',
+    '.recrow input{flex:1;min-width:0;border:1px solid #3a3f46;border-radius:6px;background:#111;color:#eef1f4;padding:6px 8px;font-size:12px}',
+    '.recrow button.go{flex:0 0 auto}',
+    '.recmsg{font-size:11px;color:#c5c9ce;min-height:1em}',
     '.fu textarea{width:100%;min-height:44px;max-height:120px;resize:vertical;border:1px solid #333844;border-radius:6px;background:#111318;color:#e8eaed;padding:6px 7px;font:12px/1.4 ui-sans-serif,system-ui,sans-serif}',
     '.fu .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.fu .row button{border:0;border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer;background:#2a2f36;color:#e8eaed}',
     '.fu .row button.go{background:#2563eb;color:#fff;font-weight:600;margin-left:auto}.fu .chk{font-size:11px;color:#9aa3ad;display:flex;align-items:center;gap:3px}',
@@ -1372,13 +1430,14 @@
     if (XT.feedDot) XT.feedDot.className = 'dot err';
     if (XT.feed) { XT.feed.setAttribute('data-state', 'error'); XT.feedTitle.textContent = 'Relay stopped'; }
     var N = xtAiName(XT.ai);
-    var msg = { no_conversation: 'The earlier ' + N + ' chat is not open any more, so a follow-up has nowhere to go. Press Suggest an edit to start a new chat.', empty_followup: 'Write a message or attach a file first.', not_logged_in: N + ' tab is not signed in.', no_stream: N + ' did not start answering.', done_timeout: N + ' took too long.', rate_limited: N + ' says the rate limit was hit.', usage_limit: N + ' says its usage limit was reached. Try again later, or pick the other AI.', not_paired: 'No ' + N + ' tab is paired.', busy: N + ' is still answering the previous request.', tab_open_failed: 'Could not open a ' + N + ' tab.', blocked_click: 'Stopped for safety on the ' + N + ' page.', relay_timeout: 'The ' + N + ' relay did not start after the files were collected. Try Send again, or check that a signed-in ' + N + ' tab is open.', submit_failed: 'The request could not be sent to ' + N + '.', collect_failed: 'Could not finish collecting the page files.', chat_tab_unreachable: 'Could not reach the ' + N + ' tab.', no_instructions: 'No instructions were loaded for ' + N + '.', sw_unreachable: 'The extension was reloaded or updated. Reload this page to reconnect it.', ext_inactive: 'The extension is not active on this page. Reload the page and press Send again.', relay_off: 'The relay is switched off in the extension. Switch it on, then press Send again.', no_gesture: 'The extension needs a fresh click. Press Send again.' }[code] || ('The AI relay stopped (' + String(code || 'error') + ').');
+    var msg = { no_conversation: 'The earlier ' + N + ' chat is not open any more, so a follow-up has nowhere to go. Press Suggest an edit to start a new chat.', empty_followup: 'Write a message or attach a file first.', not_logged_in: N + ' tab is not signed in.', no_stream: N + ' did not start answering. If the reply is already in the chat, use Recover reply from chat URL.', done_timeout: N + ' took too long. If the reply is already in the chat, use Recover reply from chat URL.', rate_limited: N + ' says the rate limit was hit.', usage_limit: N + ' says its usage limit was reached. Try again later, or pick the other AI.', not_paired: 'No ' + N + ' tab is paired.', busy: N + ' is still answering the previous request.', tab_open_failed: 'Could not open a ' + N + ' tab.', blocked_click: 'Stopped for safety on the ' + N + ' page.', relay_timeout: 'The ' + N + ' relay did not start after the files were collected. Try Send again, or check that a signed-in ' + N + ' tab is open.', submit_failed: 'The request could not be sent to ' + N + '.', collect_failed: 'Could not finish collecting the page files.', chat_tab_unreachable: 'Could not reach the ' + N + ' tab.', no_instructions: 'No instructions were loaded for ' + N + '.', sw_unreachable: 'The extension was reloaded or updated. Reload this page to reconnect it.', ext_inactive: 'The extension is not active on this page. Reload the page and press Send again.', relay_off: 'The relay is switched off in the extension. Switch it on, then press Send again.', no_gesture: 'The extension needs a fresh click. Press Send again.' }[code] || ('The AI relay stopped (' + String(code || 'error') + ').');
     var lim = code === 'file_limit', hadFiles = !!(XT.lastSend && XT.lastSend.hadFiles);
     if (lim) msg = xtLimitText(d, hadFiles);
     if (XT.feedScroll) XT.feedScroll.appendChild(el('div', { class: 'err', 'data-role': 'error', 'data-code': code }, msg + ' Nothing else changed.'));
     xtFollowShow(true);
     xtDiagButton();
     xtSnapButton();
+    if (code === 'no_stream' || code === 'no_reply' || code === 'done_timeout') xtRecoverOpen(false);
     if (lim && hadFiles) xtCard(msg, [{ act: 'retry-text', label: 'Send without page files', cls: 'go', fn: xtRetryTextOnly }], null, null, 'limit');
     xtFeedScroll();
   }
@@ -2311,6 +2370,9 @@
       var ns = el('button', { type: 'button', class: 'newsess', 'data-act': 'new-session', title: 'Clear this note, markup, attached files and AI chat, and start over' }, 'New session');
       ns.addEventListener('click', function () { xsNewSession(); });
       ui.note.appendChild(ns);
+      var rec = el('button', { type: 'button', class: 'newsess', 'data-act': 'recover-chat', title: 'Open an existing AI chat from its link and stage the latest reply as a preview. The extension only reads the chat; it does not send, delete, rename or share it.' }, 'Recover reply from chat URL');
+      rec.addEventListener('click', function () { xtFeedMount(); xtRecoverOpen(false); });
+      ui.note.appendChild(rec);
       add(ui.note);
       ui.extStatus = null;
       if (XT.last || XT.missing) xtPaintStatus();

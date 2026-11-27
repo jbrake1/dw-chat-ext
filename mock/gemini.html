@@ -35,7 +35,7 @@
   // jsdom has no blob URLs: a tiny stand-in so the ?chips=1 download button behaves like a browser's.
   if (!URL.createObjectURL) { var __blobs = {}, __n = 0; URL.createObjectURL = function (b) { var u = 'blob:' + location.origin + '/b' + (++__n); __blobs[u] = b; return u; }; window.__blobUrls = __blobs; }
   var SPEED = Number(q.get('speed') || 20), NTOK = Number(q.get('tokens') || 20);
-  var NOATTACH = q.get('attach') === '0', NOINPUT = false, NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0';
+  var NOATTACH = q.get('attach') === '0', NOINPUT = false, NOMENU = q.get('menu') === '0', LIMIT = q.get('limit') === '1', SIGNEDOUT = q.get('signedout') === '1', CODE = q.get('code') !== '0', NOREPLY = q.get('noreply') === '1', SEED = q.get('seed') === 'page';
   window.__received = []; window.__forbidden = []; window.__menuOpened = 0; window.__newChat = 0;
   var hist = document.getElementById('chat-history'), previews = document.getElementById('previews');
   var prompt = document.querySelector('.ql-editor'), send = document.querySelector('.send-button'), uploader = document.getElementById('uploader');
@@ -48,6 +48,10 @@
   if (q.get('convo') === '1') {
     history.replaceState(null, '', '/app/abc123' + location.search);
     hist.innerHTML = '<user-query><div class="query-text">old question</div></user-query><model-response><message-content class="model-response-text"><div class="markdown markdown-main-panel"><p>old answer</p></div></message-content></model-response>';
+  }
+  if (SEED || /\/app\/tokr15recover\/?$/.test(location.pathname)) {
+    hist.innerHTML = '<user-query><div class="query-text">Please update the page</div></user-query><model-response><message-content class="model-response-text"><div class="markdown markdown-main-panel"><p>File: /index.html</p><code-block><div class="code-block-decoration"><span>html</span></div><pre><code>&lt;!doctype html&gt;\n&lt;html&gt;&lt;body&gt;&lt;h1&gt;Recovered TOK-R15&lt;/h1&gt;&lt;/body&gt;&lt;/html&gt;</code></pre></code-block><p>That is all. TOK-R15</p></div></message-content></model-response>';
+    if (SEED && window.history) history.replaceState(null, '', '/app/tokr15recover' + location.search);
   }
   document.querySelector('[data-test-id=new-chat-button] a').addEventListener('click', function (e) {
     e.preventDefault(); window.__newChat++;
@@ -114,8 +118,9 @@
     var u = document.createElement('user-query'); u.innerHTML = '<div class="query-text"></div>'; u.firstChild.textContent = t; hist.appendChild(u);
     prompt.innerHTML = '<p><br></p>'; files = []; previews.textContent = '';
     streaming = true; refresh();
-    send.classList.add('stop'); send.setAttribute('aria-label', 'Stop response'); send.disabled = false; send.removeAttribute('aria-disabled');
     if (window.history) history.pushState(null, '', '/app/c' + Date.now().toString(16) + location.search);
+    if (NOREPLY) { streaming = false; refresh(); return; }                         // ?noreply=1: the send is accepted but no visible reply or Stop button (for recovery tests)
+    send.classList.add('stop'); send.setAttribute('aria-label', 'Stop response'); send.disabled = false; send.removeAttribute('aria-disabled');
     var mr = document.createElement('model-response');
     setTimeout(function () {
       mr.innerHTML = '<model-thoughts><button>Show thinking</button></model-thoughts><div class="response-container"><message-content class="model-response-text"><div class="markdown markdown-main-panel"><p></p></div></message-content></div>';

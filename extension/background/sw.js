@@ -1,7 +1,7 @@
 /* DW Chat Integration service worker (MV3).
  * Thin router: pairs one AI chat tab, checks the editor pass, loads/validates the site instructions, hands a job to the
  * chat tab's content script and relays its events back to the DW tab. No chat-site selectors live here. */
-importScripts('../lib/util.js', '../lib/providers/registry.js', '../lib/providers/chatgpt.js', '../lib/providers/gemini.js', '../lib/providers/grok.js', '../lib/providers/claude.js', '../lib/pagefiles.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
+importScripts('../lib/util.js', '../lib/providers/registry.js', '../lib/providers/chatgpt.js', '../lib/providers/gemini.js', '../lib/providers/grok.js', '../lib/providers/claude.js', '../lib/convurl.js', '../lib/pagefiles.js', '../lib/schema.js', '../lib/instructions.js', '../lib/pass.js', '../lib/report.js', '../lib/status.js');
 
 const EXT_VERSION = chrome.runtime.getManifest().version;
 const GREY = { 16: 'icons/grey-16.png', 32: 'icons/grey-32.png', 48: 'icons/grey-48.png', 128: 'icons/grey-128.png' };
@@ -350,7 +350,19 @@ async function rememberConversation(job) {
   try {
     const tb = await chrome.tabs.get(job.gptTabId).catch(() => null);
     const P = DWX.providers.get(job.siteId);
-    if (tb && tb.url && P && isConvUrl(tb.url, P)) { sess(job.sid).conv = { siteId: job.siteId, url: tb.url, t: Date.now() }; putLast(job.dwTabId, { convUrl: tb.url, sid: job.sid }); await persist(); dl('conv_saved', { provider: job.siteId }); }
+    if (!tb || !tb.url || !P) return;
+    const cfg = await getConfig();
+    const canon = DWX.canonicalizeChatUrl(tb.url, { aliases: cfg.aiSites || {} });
+    let url = null;
+    if (canon.ok && canon.provider === job.siteId) url = canon.url;
+    else if (isConvUrl(tb.url, P)) {
+      try { const u = new URL(tb.url); url = u.origin + u.pathname.replace(/\/+$/, ''); } catch (e) { url = tb.url; }
+    }
+    if (!url) return;
+    sess(job.sid).conv = { siteId: job.siteId, url: url, t: Date.now() };
+    putLast(job.dwTabId, { convUrl: url, sid: job.sid });
+    await persist();
+    dl('conv_saved', { provider: job.siteId });
   } catch (e) {}
 }
 // The AI tab for a follow-up: the paired tab if it still shows the conversation; the conversation's address in that tab
@@ -585,6 +597,19 @@ async function onGptEvent(sender, msg) {
       const r = await dispatch(job.id, true);
       if (r.ok) return { ok: true };
     }
+    // v0.1.15: if the stream watcher timed out but the reply is already in the chat, recover it and stage as usual.
+    if (evt.sent && (evt.code === 'no_stream' || evt.code === 'no_reply' || evt.code === 'done_timeout')) {
+      const recov = await recoverFromJob(job);
+      if (recov && recov.ok) {
+        dl('gpt', { kind: 'recovered', job: job.id, after: evt.code });
+        const done = { kind: 'done', status: 'complete', text: recov.text, files: recov.files, blocks: recov.blocks, assets: recov.assets, assetsMissed: recov.assetsMissed, recovered: true, after: evt.code };
+        await rememberConversation(job);
+        putLast(job.dwTabId, { sid: job.sid, jobId: job.id, pageUrl: job.pageUrl, pagePath: job.pagePath, status: 'complete', text: recov.text, files: recov.files, blocks: recov.blocks, assets: recov.assets, provider: job.siteId, via: 'rescan' });
+        await tell(job.dwTabId, { type: 'sw:event', sid: job.sid, jobId: job.id, event: done });
+        await finishJob(job.id);
+        return { ok: true };
+      }
+    }
     await tell(job.dwTabId, { type: 'sw:event', sid: job.sid, jobId: job.id, event: evt });
     if (evt.fatal) await finishJob(job.id);
     return { ok: true };
@@ -755,20 +780,134 @@ async function newAiTab(sender, msg) {
 
 // ---------- messages ----------
 
-async function peekPair(dwTabId, rec, x) {
+function sleepMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// v0.1.15: read the latest assistant reply (and, unless assets:false, generated file chips) from an AI tab.
+// Never types, sends, deletes, renames or shares the chat.
+async function harvestFromTab(tabId, siteId, opts) {
+  opts = opts || {};
+  const inst = await getInstructions(siteId, false);
+  if (!inst || !inst.instr) return { ok: false, code: 'no_instructions' };
+  try {
+    await ensureGptInjected(tabId);
+    const r = await withTimeout(chrome.tabs.sendMessage(tabId, { type: 'gpt:peek', instr: inst.instr, assets: opts.assets !== false }), opts.timeout || 25000, 'peek_timeout');
+    if (!r || !r.ok || !(r.text || (r.blocks && r.blocks.length) || (r.assets && r.assets.length))) return { ok: false, code: 'no_reply' };
+    return { ok: true, text: r.text || '', files: r.files || [], blocks: r.blocks || [], assets: r.assets || [], assetsMissed: r.assetsMissed || null };
+  } catch (e) {
+    return { ok: false, code: (e && e.code) || 'chat_tab_unreachable' };
+  }
+}
+
+async function peekPair(dwTabId, rec, x, opts) {
   try {
     const pr = (x || sessOfTab(dwTabId)).pair;
     if (!pr || !pr.tabId) return null;
-    const inst = await getInstructions(pr.siteId, false);
-    if (!inst || !inst.instr) return null;
-    const r = await withTimeout(chrome.tabs.sendMessage(pr.tabId, { type: 'gpt:peek', instr: inst.instr }), 8000, 'peek_timeout');
-    if (!r || !r.ok || !(r.text || (r.blocks && r.blocks.length))) return null;
+    const running = !!(rec && rec.jobId && S.jobs[rec.jobId]);
+    const r = await harvestFromTab(pr.tabId, pr.siteId, { assets: !running && (opts && opts.assets) !== false, timeout: running ? 8000 : 25000 });
+    if (!r.ok) return rec || null;
     putLast(dwTabId, Object.assign({}, rec || {}, {
-      status: 'complete', text: r.text || '', files: r.files || [], blocks: r.blocks || [],
-      provider: (rec && rec.provider) || S.provider, via: 'peek'
+      status: running ? ((rec && rec.status) || 'streaming') : 'complete',
+      text: r.text, files: r.files, blocks: r.blocks, assets: r.assets, assetsMissed: r.assetsMissed,
+      provider: (rec && rec.provider) || pr.siteId, via: 'peek'
     }));
     return lastOf(dwTabId);
   } catch (e) { return rec || null; }
+}
+
+// After no_stream / no_reply / done_timeout, reread the job's own chat a few times before telling the editor it failed.
+async function recoverFromJob(job) {
+  if (!job || !job.gptTabId) return null;
+  for (let i = 0; i < 3; i++) {
+    const r = await harvestFromTab(job.gptTabId, job.siteId, { assets: true });
+    if (r.ok) return r;
+    await sleepMs(1500);
+  }
+  return null;
+}
+
+// Open or focus a known conversation URL in the paired AI tab (or a new tab of that AI). Read only.
+async function ensureRecoverTab(providerId, dwTabId, x, url) {
+  const P = DWX.providers.get(providerId);
+  if (!P) return { ok: false, code: 'bad_provider' };
+  x = x || sessOfTab(dwTabId);
+  const cfg = await getConfig();
+  const hosts = Object.keys(cfg.aiSites).filter((h) => cfg.aiSites[h] === providerId);
+  const want = convKey(url);
+  let tab = (x.pair && x.pair.siteId === providerId) ? await chrome.tabs.get(x.pair.tabId).catch(() => null) : null;
+  if (tab && !hosts.includes(hostOf(tab.url))) tab = null;
+  if (tab) {
+    if (convKey(tab.url) !== want) {
+      try { await withTimeout(chrome.tabs.update(tab.id, { url: url }), 10000, 'tab_open_failed'); } catch (e) { return { ok: false, code: 'tab_open_failed' }; }
+      const loaded = await waitTabComplete(tab.id, 30000);
+      dl('recover_nav', { provider: providerId, ok: loaded });
+    } else {
+      try { await chrome.tabs.update(tab.id, { active: true }); } catch (e) {}
+    }
+    return { ok: true, tabId: tab.id, how: 'paired' };
+  }
+  const matches = P.tabMatches.concat(((cfg.devTabMatches || {})[providerId]) || []);
+  const open = (await chrome.tabs.query({ url: matches }).catch(() => [])).filter((t) => {
+    if (!hosts.includes(hostOf(t.url))) return false;
+    const o = ownerOf(t.id);
+    if (o && o !== x && sessionLive(o)) return false;
+    return convKey(t.url) === want;
+  });
+  if (open[0]) {
+    const r = await pairTab(open[0].id, x);
+    if (!r.ok) return { ok: false, code: r.code || 'tab_open_failed' };
+    try { await chrome.tabs.update(open[0].id, { active: true }); } catch (e) {}
+    return { ok: true, tabId: open[0].id, how: 'reused' };
+  }
+  const dwTab = await chrome.tabs.get(dwTabId).catch(() => null);
+  const opts = { url: url, active: false };
+  if (dwTab) { opts.windowId = dwTab.windowId; opts.index = dwTab.index + 1; }
+  let created = null;
+  try { created = await withTimeout(chrome.tabs.create(opts), 10000, 'tab_open_failed'); } catch (e) { created = null; }
+  if (!created) return { ok: false, code: 'tab_open_failed' };
+  const loaded = await waitTabComplete(created.id, 30000);
+  dl('recover_opened', { provider: providerId, ok: loaded });
+  const r = await pairTab(created.id, x);
+  if (!r.ok) return { ok: false, code: r.code || 'tab_open_failed' };
+  return { ok: true, tabId: created.id, how: 'opened' };
+}
+
+async function handleRecover(sender, msg) {
+  const tid = sender.tab && sender.tab.id;
+  if (!sender.tab || sender.frameId !== 0 || !S.tabs[tid] || !(await isDwHost(hostOf(sender.url)))) return { ok: false, code: 'not_active' };
+  const x = noteSid(tid, msg && msg.sid);
+  const cfg = await getConfig();
+  const canon = DWX.canonicalizeChatUrl(msg && msg.url, { aliases: cfg.aiSites || {} });
+  if (!canon.ok) return { ok: false, code: canon.code };
+  const providerId = canon.provider;
+  if (x.activeJobId && S.jobs[x.activeJobId]) {
+    const job = S.jobs[x.activeJobId];
+    const tab = await chrome.tabs.get(job.gptTabId).catch(() => null);
+    if (tab && convKey(tab.url) === convKey(canon.url)) {
+      const r = await harvestFromTab(job.gptTabId, providerId, { assets: false, timeout: 8000 });
+      if (r.ok) {
+        putLast(tid, { sid: x.sid, jobId: job.id, status: 'streaming', text: r.text, files: r.files, blocks: r.blocks, provider: providerId, convUrl: canon.url, via: 'recover' });
+        await tell(tid, { type: 'sw:event', sid: x.sid, jobId: job.id, event: { kind: 'chunk', seq: 1, text: r.text, files: r.files } });
+        return { ok: true, running: true, provider: providerId };
+      }
+    }
+    return { ok: false, code: 'busy' };
+  }
+  const tabR = await ensureRecoverTab(providerId, tid, x, canon.url);
+  if (!tabR.ok) return tabR;
+  if (S.provider !== providerId) await setProvider(providerId, x);
+  let last = { ok: false, code: 'no_reply' };
+  for (let i = 0; i < 15; i++) {
+    last = await harvestFromTab(tabR.tabId, providerId, { assets: true });
+    if (last.ok) break;
+    await sleepMs(1000);
+  }
+  if (!last.ok) return last;
+  x.conv = { siteId: providerId, url: canon.url, t: Date.now() };
+  putLast(tid, { sid: x.sid, status: 'complete', text: last.text, files: last.files, blocks: last.blocks, assets: last.assets, assetsMissed: last.assetsMissed, provider: providerId, convUrl: canon.url, via: 'recover' });
+  await persist();
+  await tell(tid, { type: 'sw:event', sid: x.sid, jobId: 'recover', event: { kind: 'done', status: 'complete', text: last.text, files: last.files, blocks: last.blocks, assets: last.assets, assetsMissed: last.assetsMissed, recovered: true } });
+  dl('recovered', { provider: providerId, how: tabR.how });
+  return { ok: true, provider: providerId };
 }
 
 async function lastResult(sender, msg) {
@@ -782,8 +921,11 @@ async function lastResult(sender, msg) {
   let rec = lastOf('s:' + x.sid);
   if (!rec) { rec = lastOf(tabId); if (rec && ((rec.sid && rec.sid !== x.sid) || ((path || pageUrl) && !samePage(rec, path, pageUrl)))) rec = null; }
   const running = !!(rec && rec.jobId && S.jobs[rec.jobId]);
-  if ((!rec || (rec.status !== 'complete' && rec.status !== 'stopped' && rec.status !== 'error')) && !running && rec && x.pair) {
-    const peeked = await peekPair(tabId, rec, x);
+  const empty = !rec || !(rec.text || (rec.blocks && rec.blocks.length));
+  // v0.1.15: reread the AI tab when the stored snapshot is empty or still in flight — including a mid-stream
+  // editor reload and a no_stream error, so a reply that already landed can be restored.
+  if (rec && x.pair && (empty || rec.status === 'streaming' || rec.status === 'sending' || rec.status === 'error')) {
+    const peeked = await peekPair(tabId, rec, x, { assets: !running && rec.status === 'error' });
     if (peeked) rec = peeked;
   }
   if (!rec) return { ok: false, code: 'no_result' };
@@ -856,6 +998,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'popup:setProvider': if (!fromExt) return { ok: false }; return setProvider(msg.provider);
       case 'dw:lastResult': return lastResult(sender, msg);
+      case 'dw:recover': return handleRecover(sender, msg);
       case 'dw:pageStatus': {
         const tid = sender.tab && sender.tab.id;
         const x = tid != null && S.tabs[tid] ? noteSid(tid, msg.sid) : (SID_RE.test(msg.sid || '') ? sess(msg.sid) : lastSess());
@@ -963,7 +1106,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
     if (!cfg.aiSites[hostOf(info.url)]) for (const x of Object.values(S.sessions)) if (x.pair && x.pair.tabId === tabId) await unpair(x, false);
   }
   if (t && left) await deactivateTab(tabId);
+  // v0.1.15: as soon as the AI tab lands on a conversation address (e.g. /app/<id>), remember it — not only when the reply finishes.
+  if (info.url || info.status === 'complete') {
+    for (const job of Object.values(S.jobs)) if (job.gptTabId === tabId) await rememberConversation(job);
+  }
 });
 
 // test visibility only (config.allowDevOverride is false in the shipped build)
-self.__dw = { dl, diagSnapshot, handleSnapshot, findAiTab, injectIntoOpenDwTabs, iconLog, state: () => { syncLegacy(); return JSON.parse(JSON.stringify(S)); }, refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab, sess, lastSess };
+self.__dw = { dl, diagSnapshot, handleSnapshot, findAiTab, injectIntoOpenDwTabs, iconLog, state: () => { syncLegacy(); return JSON.parse(JSON.stringify(S)); }, refreshInstructions, pairTab, unpair, getInstructions, getConfig, setProvider, ensureProviderTab, sess, lastSess, handleRecover, harvestFromTab, canonicalizeChatUrl: (u, o) => DWX.canonicalizeChatUrl(u, o) };

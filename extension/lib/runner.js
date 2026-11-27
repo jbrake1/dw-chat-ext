@@ -39,6 +39,7 @@
       if (ctl.detector) ctl.detector.cancel();
       ctl.timers.forEach(function (t) { win.clearTimeout(t); });
       ctl.timers = [];
+      if (ctl.poll != null) { win.clearInterval(ctl.poll); ctl.poll = null; }
       if (ctl.trailing != null) { win.clearTimeout(ctl.trailing); ctl.trailing = null; }
     }
     // v0.1.6: when a step fails for a generic reason, a known notice on the page (usage limit, sign-in wall) explains it better.
@@ -67,6 +68,8 @@
     function emitChunk(force) {
       if (ctl.finished || !ctl.last) return;
       if (ctl.paused) return; // hold the relay; resume() flushes the latest snapshot
+      // v0.1.15: do not emit an empty snapshot at watch start (that used to log chunk1 at send with no text).
+      if (!ctl.last.nonEmpty && !force) return;
       var now = Date.now();
       var min = stream.emitMinIntervalMs || 0;
       if (!force && now - ctl.lastEmitAt < min) {
@@ -121,7 +124,7 @@
       }
       // generation began (stop button seen) and has ended, but no assistant message was ever found: the reply selector is probably stale
       if (ctl.sawStop && !ctl.sawMessage && !st.present.stop && ctl.grace == null) {
-        ctl.grace = later(function () { if (!ctl.sawMessage) fail('stream', 'no_reply'); }, stream.noReplyGraceMs || 8000);
+        ctl.grace = later(function () { if (!ctl.sawMessage && !tryRecover('no_reply')) fail('stream', 'no_reply'); }, stream.noReplyGraceMs || 8000);
       }
       if (uploads && !st.error && !ctl.limitBefore) {                                   // the notice (not a reply) appeared after this send
         var lim = null; try { lim = I.detectLimit(win, doc, st.newMessage ? st.text : '', instr, job.prompt); } catch (e) { lim = null; }
@@ -133,6 +136,25 @@
       ctl.detector.update(st);
     }
 
+    // v0.1.15: if a reply is already in the chat (selectors missed it during the stream, or the editor
+    // was reloaded), pick it up instead of failing. Same harvest path as a normal completion.
+    function tryRecover(how) {
+      if (ctl.finished) return false;
+      evaluate();
+      if (!(ctl.sawMessage || (ctl.last && ctl.last.nonEmpty))) return false;
+      if (!ctl.started) {
+        ctl.started = true;
+        emit({ kind: 'step', step: 'stream', ok: true, detail: { started: true, recovered: true, how: how } });
+      } else emit({ kind: 'step', step: 'stream', ok: true, detail: { recovered: true, how: how } });
+      emitChunk(true);
+      if (ctl.last && ctl.last.nonEmpty && !ctl.last.present.stop) {
+        later(function () {
+          if (!ctl.finished && ctl.last && ctl.last.nonEmpty && !ctl.last.present.stop) finish('complete');
+        }, stream.recoverStableMs || 1500);
+      }
+      return true;
+    }
+
     function startWatching() {
       ctl.startedAt = Date.now();
       ctl.detector = new D.DoneDetector(stream.done, {
@@ -142,8 +164,10 @@
       });
       ctl.observer = new win.MutationObserver(function () { evaluate(); });
       ctl.observer.observe(doc.documentElement, { childList: true, subtree: true, characterData: true, attributes: true });
-      later(function () { if (!ctl.sawStop && !ctl.sawMessage) fail('stream', 'no_stream'); }, stream.startTimeoutMs || 60000);
-      later(function () { fail('stream', 'done_timeout'); }, stream.maxDurationMs || 900000);
+      // Shadow-root mutations are invisible to the document observer; a slow poll still picks the reply up.
+      ctl.poll = win.setInterval(function () { if (!ctl.finished) evaluate(); }, stream.pollMs || 1000);
+      later(function () { if (!ctl.sawStop && !ctl.sawMessage && !tryRecover('no_stream')) fail('stream', 'no_stream'); }, stream.startTimeoutMs || 60000);
+      later(function () { if (!tryRecover('done_timeout')) fail('stream', 'done_timeout'); }, stream.maxDurationMs || 900000);
       evaluate();
     }
 

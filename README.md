@@ -4,6 +4,8 @@ A Manifest V3 Chrome extension for [DW Alliance](https://dwalliance.com) site ed
 
 ChatGPT is the first chat site and Chrome is the first browser. Adding another chat site later is a new JSON instructions file plus one config line, not a rewrite of the extension.
 
+**v0.1.15:** if Gemini already wrote a reply but the stream watcher timed out, the extension rescans that chat (including shadow roots) and stages the usual preview; you can also recover a reply by pasting a chat URL (Gemini first; ChatGPT, Grok and Claude too). Tracking query parameters are stripped. The extension only reads the chat — it never sends, deletes, renames or shares. See [CHANGELOG.md](CHANGELOG.md).
+
 **v0.1.14:** a missing picture/srcset/image-set/url() candidate with a working fallback is a warning (Publish stays on); Copy diagnostics and Send page snapshot are in the chat header and on the preview panel; follow-ups can use the same markup tools and send a new screenshot. See [CHANGELOG.md](CHANGELOG.md).
 
 **v0.1.13:** works with ChatGPT, Gemini, Grok (grok.com) and Claude (claude.ai); the editor session survives close, refresh and navigation (with **New session**); several editor tabs can each have their own AI tab; Publish is guarded against overwriting a live file that changed since you opened it; staged previews have **Add 10 min**. See [CHANGELOG.md](CHANGELOG.md).

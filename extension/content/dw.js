@@ -416,6 +416,12 @@
         send({ type: 'dw:diag' }).then(function (r) { toPage('dw-ext-diag-result', { ok: !!(r && r.ok), code: r && r.code, ext: r && r.diag ? r.diag : null, page: pageLog(), active: S.active, extVersion: EXT_VERSION }); });
       } else if (d.type === 'dw-ext-snapshot') {
         send({ type: 'dw:snapshot' }).then(function (r) { toPage('dw-ext-snapshot-result', r && r.ok ? { ok: true, id: r.id, via: r.via, filename: r.filename, json: r.json } : { ok: false, code: (r && r.code) || 'no_answer' }); });
+      } else if (d.type === 'dw-ext-recover') {
+        // v0.1.15: open or focus the pasted chat URL and reread the latest reply. Read only.
+        if (!S.active || !S.relay) toPage('dw-ext-recover-result', { ok: false, code: !S.active ? 'ext_inactive' : 'relay_off' });
+        else send({ type: 'dw:recover', url: String(d.url || '') }).then(function (r) {
+          toPage('dw-ext-recover-result', r && r.ok ? { ok: true, provider: r.provider, running: !!r.running } : { ok: false, code: (r && r.code) || 'no_answer' });
+        });
       } else if (d.type === 'dw-ext-submit') onSubmitEvent(d, 'native');
       else if (d.type === 'dw-ext-provider' && S.active && DWX.providers.valid(d.provider)) send({ type: 'dw:setProvider', provider: d.provider });
       else if (d.type === 'dw-ext-control' && d.action === 'stop') localStop();

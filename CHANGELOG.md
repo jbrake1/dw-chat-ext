@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.15 — 2026-11-27
+
+- **Gemini `no_stream` when a reply was already in the chat.** A send that attached files and was accepted could still end with "Gemini did not start answering" after the stream timeout, even though the reply was visible in the Gemini tab. The first `chunk1` logged at send time was an empty snapshot, not the first token. If the editor page was reloaded mid-stream, restore kept that empty snapshot and did not reread the Gemini tab while the job was still running. v0.1.15 rescans the job's own chat on `no_stream` / `no_reply` / `done_timeout` (and on restore when the stored text is empty), walks shadow roots the document observer cannot see, and treats a found reply like a normal completion (code blocks and generated file chips included) so the usual preview with Publish/Discard is staged.
+- **Recover reply from chat URL.** In Suggest an edit (the first-send note box, the chat header, and automatically after a stream timeout), paste a chat link. Tracking query parameters are stripped; a Gemini link keeps only `/app/<id>` (or `/u/N/app/<id>`). The extension opens or focuses that chat in the paired AI tab, reads the latest reply only (it never sends a message, or deletes, renames or shares the chat), and stages the preview. The same URL recovery works for ChatGPT, Grok and Claude chat links.
+- Broader Gemini assistant and stop selectors (rev 5 of `instructions/gemini.json`), including `response-container` and "Stop generating".
+
+
 ## v0.1.14 — 2026-11-25
 
 - **Missing files with a fallback no longer block Publish.** In a `<picture>`, a missing `<source srcset>` candidate is a warning when the `<img>` (or another source) exists — the case of a generated JPEG used as the fallback while a `.webp` source 404s. The same applies to `srcset` entries where at least one candidate exists, CSS `image-set()` with an existing alternative, and `url()` layers with an existing fallback. Warnings show as **missing (has fallback): path** in amber and Publish stays on. Only a reference with no working alternative is marked **MISSING** and blocks Publish.

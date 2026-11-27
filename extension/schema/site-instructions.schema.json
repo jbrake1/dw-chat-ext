@@ -188,7 +188,7 @@
         }
       ]
     },
-    "selectors": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "$ref": "#/definitions/selector" } },
+    "selectors": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/definitions/selector" } },
     "selectorStep": {
       "type": "object", "required": ["selectors"], "additionalProperties": false,
       "properties": { "selectors": { "$ref": "#/definitions/selectors" } }
